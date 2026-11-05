@@ -8,7 +8,10 @@ from dataclasses import replace
 import math
 import re
 
-from delivery_manager_toolbox.modules.facturacion.configuration import BillingConfiguration
+from delivery_manager_toolbox.modules.facturacion.configuration import (
+    BillingConfiguration,
+    resolve_management_people_in_sheet,
+)
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountManagementCalculation,
     AllocationStatus,
@@ -36,36 +39,32 @@ def calculate_manager_targets(
         configuration.management_people,
         key=lambda item: normalize_identifier(item.name),
     )
-    employee_ids = {
-        normalize_identifier(person.name): person.employee_id
-        for person in analysis.people
-    }
-    for exception in configuration.management_person_account_exceptions:
-        employee_ids.setdefault(
-            normalize_identifier(exception.person_name),
-            exception.employee_id,
-        )
-    monthly_capacities = {
-        normalize_identifier(item.person_name): item
-        for item in analysis.person_monthly_capacities
+    resolutions = {
+        normalize_identifier(item.configured_manager_name): item
+        for item in resolve_management_people_in_sheet(configuration, analysis)
     }
 
     targets: list[ManagerTarget] = []
     for item in configured:
-        capacity = monthly_capacities.get(normalize_identifier(item.name))
-        monthly_workable_hours = capacity.monthly_workable_hours if capacity is not None else None
+        resolution = resolutions[normalize_identifier(item.name)]
+        monthly_workable_hours = resolution.monthly_workable_hours
         base_target_hours = (
             monthly_workable_hours * item.free_capacity_percentage / 100
             if monthly_workable_hours is not None
             else 0.0
         )
         targets.append(ManagerTarget(
-            employee_id=employee_ids.get(normalize_identifier(item.name), item.name),
+            employee_id=(
+                resolution.matched_employee_id
+                or resolution.configured_employee_id
+                or item.name
+            ),
             manager_name=item.name,
             capacity_percentage=item.free_capacity_percentage,
             base_target_hours=base_target_hours,
             monthly_workable_hours=monthly_workable_hours,
-            capacity_source=capacity.capacity_source if capacity is not None else None,
+            capacity_source=resolution.capacity_source,
+            resolution=resolution,
         ))
     return tuple(targets)
 
@@ -306,6 +305,28 @@ def calculate_management_allocation(
     targets = calculate_manager_targets(total_management_hours, analysis, configuration)
     if total_management_hours > 0 and not targets:
         return None
+    missing_targets = tuple(
+        target for target in targets if target.monthly_workable_hours is None
+    )
+    if missing_targets:
+        summaries = build_manager_summary(targets, ())
+        incidents = tuple(_missing_capacity_incident(target) for target in missing_targets)
+        return ManagementAllocationResult(
+            sheet_name=analysis.sheet_name,
+            assignments=(),
+            manager_summaries=summaries,
+            total_management_hours=total_management_hours,
+            total_assigned_hours=0.0,
+            allocation_difference=-total_management_hours,
+            allocation_status=AllocationStatus.CAPACITY_DATA_MISSING,
+            split_account_count=0,
+            incidents=incidents,
+            total_base_target_hours=sum(item.base_target_hours for item in targets),
+            overflow_hours=0.0,
+            management_person_resolutions=tuple(
+                item.resolution for item in targets if item.resolution is not None
+            ),
+        )
     initial = allocate_accounts_to_managers(analysis.sheet_name, records, targets)
     assignments = rebalance_allocations(initial, targets)
     allocation_difference = validate_allocation(records, assignments)
@@ -320,11 +341,6 @@ def calculate_management_allocation(
         if overflow_hours > _FLOAT_TOLERANCE
         else AllocationStatus.CAPACITY_OK
     )
-    incidents = tuple(
-        f"MANAGER_MONTHLY_CAPACITY_NOT_FOUND: {item.manager_name} ({analysis.sheet_name})"
-        for item in targets
-        if item.monthly_workable_hours is None
-    )
     manager_count_by_account: dict[str, set[str]] = defaultdict(set)
     for assignment in assignments:
         manager_count_by_account[assignment.account_code].add(assignment.manager_name)
@@ -337,9 +353,25 @@ def calculate_management_allocation(
         allocation_difference=allocation_difference,
         allocation_status=status,
         split_account_count=sum(len(managers) > 1 for managers in manager_count_by_account.values()),
-        incidents=incidents,
+        incidents=(),
         total_base_target_hours=total_base_target,
         overflow_hours=overflow_hours,
+        management_person_resolutions=tuple(
+            item.resolution for item in targets if item.resolution is not None
+        ),
+    )
+
+
+def _missing_capacity_incident(target: ManagerTarget) -> str:
+    resolution = target.resolution
+    if resolution is None or resolution.matched_employee_id is None:
+        return (
+            "MANAGER_NOT_FOUND_IN_ACTIVE_SHEET: "
+            f"{target.manager_name}. Gestor no localizado en la hoja activa."
+        )
+    return (
+        "MANAGER_MONTHLY_CAPACITY_NOT_FOUND: "
+        f"{target.manager_name}. No se ha podido determinar su jornada mensual."
     )
 
 

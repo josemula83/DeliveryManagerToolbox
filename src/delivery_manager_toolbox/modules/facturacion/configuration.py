@@ -10,6 +10,8 @@ from pathlib import Path
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountAssignment,
     ColumnMapping,
+    ManagementPersonMatchingMethod,
+    ManagementPersonResolution,
     Person,
     SheetAnalysis,
 )
@@ -33,6 +35,7 @@ SCHEMA_VERSION = 3
 class ManagementPerson:
     name: str
     free_capacity_percentage: float
+    employee_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,10 +69,104 @@ class BillingConfiguration:
     column_mapping: ColumnMapping = ColumnMapping()
 
 
-def add_management_person(configuration: BillingConfiguration, name: object, percentage: object) -> BillingConfiguration:
+def resolve_management_person_in_sheet(
+    configured_manager: ManagementPerson,
+    analysis: SheetAnalysis,
+    *,
+    configured_employee_id: str | None = None,
+) -> ManagementPersonResolution:
+    """Resuelve un gestor sin aproximaciones difusas y audita el método usado."""
+    employee_id = configured_manager.employee_id or configured_employee_id
+    matched: Person | None = None
+    method = ManagementPersonMatchingMethod.NOT_FOUND
+
+    if employee_id:
+        employee_key = normalize_identifier(employee_id)
+        id_matches = tuple(
+            person
+            for person in analysis.people
+            if normalize_identifier(person.employee_id) == employee_key
+        )
+        if len(id_matches) == 1:
+            matched = id_matches[0]
+            method = ManagementPersonMatchingMethod.EXACT_EMPLOYEE_ID
+
+    if matched is None:
+        name_key = normalize_identifier(configured_manager.name)
+        name_matches = tuple(
+            person
+            for person in analysis.people
+            if normalize_identifier(person.name) == name_key
+        )
+        if len(name_matches) == 1:
+            matched = name_matches[0]
+            method = ManagementPersonMatchingMethod.NORMALIZED_NAME
+        elif len(name_matches) > 1:
+            method = ManagementPersonMatchingMethod.AMBIGUOUS_NORMALIZED_NAME
+
+    capacity = None
+    if matched is not None:
+        matched_id = normalize_identifier(matched.employee_id)
+        capacity = next(
+            (
+                item
+                for item in analysis.person_monthly_capacities
+                if normalize_identifier(item.employee_id) == matched_id
+            ),
+            None,
+        )
+    return ManagementPersonResolution(
+        configured_manager_name=configured_manager.name,
+        configured_employee_id=employee_id,
+        matched_person_name=matched.name if matched is not None else None,
+        matched_employee_id=matched.employee_id if matched is not None else None,
+        matched_source_row=matched.source_row if matched is not None else None,
+        matching_method=method,
+        monthly_workable_hours=(capacity.monthly_workable_hours if capacity is not None else None),
+        capacity_source=(capacity.capacity_source if capacity is not None else None),
+    )
+
+
+def resolve_management_people_in_sheet(
+    configuration: BillingConfiguration,
+    analysis: SheetAnalysis,
+) -> tuple[ManagementPersonResolution, ...]:
+    """Resuelve todas las Personas en Gestión con una única política de identidad."""
+    exception_ids: dict[str, set[str]] = {}
+    for exception in configuration.management_person_account_exceptions:
+        exception_ids.setdefault(normalize_identifier(exception.person_name), set()).add(
+            exception.employee_id
+        )
+    resolutions: list[ManagementPersonResolution] = []
+    for manager in configuration.management_people:
+        candidate_ids = exception_ids.get(normalize_identifier(manager.name), set())
+        inherited_employee_id = next(iter(candidate_ids)) if len(candidate_ids) == 1 else None
+        resolutions.append(resolve_management_person_in_sheet(
+            manager,
+            analysis,
+            configured_employee_id=inherited_employee_id,
+        ))
+    return tuple(resolutions)
+
+
+def add_management_person(
+    configuration: BillingConfiguration,
+    name: object,
+    percentage: object,
+    employee_id: object | None = None,
+) -> BillingConfiguration:
     cleaned_name = clean_display_value(name, "El nombre")
     _ensure_absent((person.name for person in configuration.management_people), cleaned_name, "persona")
-    people = (*configuration.management_people, ManagementPerson(cleaned_name, validate_percentage(percentage)))
+    cleaned_employee_id = (
+        clean_display_value(employee_id, "El identificador de empleado")
+        if employee_id is not None and str(employee_id).strip()
+        else None
+    )
+    people = (*configuration.management_people, ManagementPerson(
+        cleaned_name,
+        validate_percentage(percentage),
+        cleaned_employee_id,
+    ))
     return _validated(replace(configuration, management_people=people))
 
 
@@ -83,7 +180,11 @@ def update_management_person_percentage(
     people: list[ManagementPerson] = []
     for person in configuration.management_people:
         if normalize_identifier(person.name) == key:
-            people.append(ManagementPerson(person.name, validate_percentage(percentage)))
+            people.append(ManagementPerson(
+                person.name,
+                validate_percentage(percentage),
+                person.employee_id,
+            ))
             found = True
         else:
             people.append(person)
@@ -96,8 +197,16 @@ def replace_management_people(
     configuration: BillingConfiguration,
     people: list[tuple[object, object]],
 ) -> BillingConfiguration:
+    existing_ids = {
+        normalize_identifier(person.name): person.employee_id
+        for person in configuration.management_people
+    }
     records = tuple(
-        ManagementPerson(clean_display_value(name, "El nombre"), validate_percentage(percentage))
+        ManagementPerson(
+            clean_display_value(name, "El nombre"),
+            validate_percentage(percentage),
+            existing_ids.get(normalize_identifier(name)),
+        )
         for name, percentage in people
     )
     retained_names = {normalize_identifier(person.name) for person in records}
@@ -150,10 +259,14 @@ def available_exception_people(
     configuration: BillingConfiguration,
     analysis: SheetAnalysis,
 ) -> tuple[Person, ...]:
-    management_names = {normalize_identifier(person.name) for person in configuration.management_people}
+    management_ids = {
+        normalize_identifier(item.matched_employee_id)
+        for item in resolve_management_people_in_sheet(configuration, analysis)
+        if item.matched_employee_id is not None
+    }
     return tuple(
         person for person in analysis.people
-        if normalize_identifier(person.name) in management_names
+        if normalize_identifier(person.employee_id) in management_ids
     )
 
 
@@ -400,6 +513,8 @@ def validate_configuration(configuration: BillingConfiguration) -> None:
     for person in configuration.management_people:
         clean_display_value(person.name, "El nombre")
         validate_percentage(person.free_capacity_percentage)
+        if person.employee_id is not None:
+            clean_display_value(person.employee_id, "El identificador de empleado")
 
     validate_unique(configuration.no_management_accounts, "cuentas sin gestión")
     validate_unique(
@@ -515,6 +630,12 @@ def configuration_from_json(contents: str | bytes) -> BillingConfiguration:
                 ManagementPerson(
                     clean_display_value(item["name"], "El nombre"),
                     validate_percentage(item["free_capacity_percentage"]),
+                    (
+                        clean_display_value(item["employee_id"], "El identificador de empleado")
+                        if item.get("employee_id") is not None
+                        and str(item["employee_id"]).strip()
+                        else None
+                    ),
                 )
                 for item in _object_items(people_payload, "management_people")
             ),

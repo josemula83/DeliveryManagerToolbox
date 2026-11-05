@@ -110,7 +110,11 @@ def parse_hierarchical_worksheet(
                 employee_id = _employee_id(column_a)
                 current_person = people_by_id.setdefault(
                     normalize_identifier(employee_id),
-                    Person(employee_id=employee_id, name=clean_display_value(column_b, "La persona")),
+                    Person(
+                        employee_id=employee_id,
+                        name=clean_display_value(column_b, "La persona"),
+                        source_row=row_number,
+                    ),
                 )
                 capacity = _person_monthly_capacity(current_person, day_headers, row[2:])
                 if capacity is not None:
@@ -287,6 +291,7 @@ def _person_monthly_capacity(
                 person_name=person.name,
                 monthly_workable_hours=float(value),
                 capacity_source=CapacitySource.PERSON_TOTAL_HOURS,
+                source_row=person.source_row,
             )
 
     daily_total = sum(
@@ -307,6 +312,7 @@ def _person_monthly_capacity(
         person_name=person.name,
         monthly_workable_hours=daily_total,
         capacity_source=CapacitySource.DAILY_HOURS,
+        source_row=person.source_row,
     )
 
 

@@ -10,7 +10,15 @@ from delivery_manager_toolbox.modules.facturacion.allocation import (
 )
 from delivery_manager_toolbox.modules.facturacion.configuration import (
     BillingConfiguration,
+    ManagementPerson,
+    ManagementPersonAccountException,
     add_management_person,
+    resolve_management_person_in_sheet,
+    resolve_management_people_in_sheet,
+)
+from delivery_manager_toolbox.modules.facturacion.business import (
+    calculate_sheet_management,
+    calculate_sheet_rate_optimization,
 )
 from delivery_manager_toolbox.modules.facturacion.excel_reader import parse_hierarchical_worksheet
 from delivery_manager_toolbox.modules.facturacion.models import (
@@ -18,8 +26,10 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     AllocationStatus,
     CalculationType,
     CapacitySource,
+    ManagementPersonMatchingMethod,
     Person,
     PersonMonthlyWorkCapacity,
+    SheetAnalysis,
 )
 
 
@@ -62,6 +72,122 @@ def manager_configuration(percentage: float) -> BillingConfiguration:
         "Daniel Alarcón Guerrero",
         percentage,
     )
+
+
+def sheet_with_people(
+    *records: tuple[str, str, float],
+) -> SheetAnalysis:
+    people = tuple(
+        Person(employee_id, name, index)
+        for index, (employee_id, name, _) in enumerate(records, 2)
+    )
+    capacities = tuple(
+        PersonMonthlyWorkCapacity(
+            employee_id=employee_id,
+            person_name=name,
+            monthly_workable_hours=hours,
+            capacity_source=CapacitySource.PERSON_TOTAL_HOURS,
+            source_row=index,
+        )
+        for index, (employee_id, name, hours) in enumerate(records, 2)
+    )
+    return SheetAnalysis("Mes", people, (), (), (), len(records), capacities)
+
+
+class ManagementPersonResolutionTests(unittest.TestCase):
+    def test_exact_employee_id_has_priority_over_name(self) -> None:
+        source = sheet_with_people(("105275", "Nombre actualizado", 181))
+        manager = ManagementPerson("Nombre histórico", 50, "105275")
+
+        resolution = resolve_management_person_in_sheet(manager, source)
+
+        self.assertEqual(resolution.matching_method, ManagementPersonMatchingMethod.EXACT_EMPLOYEE_ID)
+        self.assertEqual(resolution.matched_employee_id, "105275")
+        self.assertEqual(resolution.matched_person_name, "Nombre actualizado")
+        self.assertEqual(resolution.matched_source_row, 2)
+        self.assertEqual(resolution.monthly_workable_hours, 181)
+
+    def test_normalized_name_matches_accents_without_configured_employee_id(self) -> None:
+        source = sheet_with_people(("105275", "José Antonio Ferrandez Mula", 181))
+        manager = ManagementPerson("Jose Antonio Ferrandez Mula", 50)
+
+        resolution = resolve_management_person_in_sheet(manager, source)
+
+        self.assertIsNone(resolution.configured_employee_id)
+        self.assertEqual(resolution.matching_method, ManagementPersonMatchingMethod.NORMALIZED_NAME)
+        self.assertEqual(resolution.matched_employee_id, "105275")
+        self.assertEqual(resolution.monthly_workable_hours, 181)
+
+    def test_historical_configuration_can_inherit_exact_id_from_exception(self) -> None:
+        source = sheet_with_people(("105275", "Nombre leído del Excel", 181))
+        config = BillingConfiguration(
+            management_people=(ManagementPerson("Jose Antonio Ferrandez Mula", 50),),
+            management_person_account_exceptions=(
+                ManagementPersonAccountException(
+                    "105275",
+                    "Jose Antonio Ferrandez Mula",
+                    "EXT-1",
+                ),
+            ),
+        )
+
+        resolution = resolve_management_people_in_sheet(config, source)[0]
+
+        self.assertEqual(resolution.configured_employee_id, "105275")
+        self.assertEqual(resolution.matching_method, ManagementPersonMatchingMethod.EXACT_EMPLOYEE_ID)
+        self.assertEqual(resolution.matched_person_name, "Nombre leído del Excel")
+
+    def test_normalized_name_matches_double_and_surrounding_spaces(self) -> None:
+        source = sheet_with_people(("2001", "Pedro Miguel Franco Sarabia", 181))
+        manager = ManagementPerson("  Pedro  Miguel Franco   Sarabia ", 100)
+
+        resolution = resolve_management_person_in_sheet(manager, source)
+
+        self.assertEqual(resolution.matching_method, ManagementPersonMatchingMethod.NORMALIZED_NAME)
+        self.assertEqual(resolution.matched_employee_id, "2001")
+
+    def test_similar_but_different_name_is_not_matched(self) -> None:
+        source = sheet_with_people(("3001", "Rafael Juan Guerra", 181))
+        manager = ManagementPerson("Rafael Joan Guerra", 100)
+
+        resolution = resolve_management_person_in_sheet(manager, source)
+
+        self.assertEqual(resolution.matching_method, ManagementPersonMatchingMethod.NOT_FOUND)
+        self.assertIsNone(resolution.matched_employee_id)
+        self.assertIsNone(resolution.monthly_workable_hours)
+
+    def test_ambiguous_normalized_name_is_not_matched(self) -> None:
+        source = sheet_with_people(
+            ("3001", "Rafael Juan Guerra", 181),
+            ("3002", "Ráfael  Juan Guerra", 160),
+        )
+        manager = ManagementPerson("Rafael Juan Guerra", 100)
+
+        resolution = resolve_management_person_in_sheet(manager, source)
+
+        self.assertEqual(
+            resolution.matching_method,
+            ManagementPersonMatchingMethod.AMBIGUOUS_NORMALIZED_NAME,
+        )
+        self.assertIsNone(resolution.matched_employee_id)
+
+    def test_all_present_managers_resolve_monthly_hours(self) -> None:
+        records = (
+            ("1001", "Daniel Alarcón Guerrero", 181),
+            ("1002", "Jose Antonio Ferrandez Mula", 181),
+            ("1003", "Pedro Miguel Franco Sarabia", 181),
+            ("1004", "Rafael Juan Guerra", 181),
+        )
+        source = sheet_with_people(*records)
+        config = BillingConfiguration()
+        for _, name, _ in records:
+            config = add_management_person(config, name, 100)
+
+        targets = calculate_manager_targets(991.5, source, config)
+
+        self.assertTrue(all(item.monthly_workable_hours == 181 for item in targets))
+        self.assertTrue(all(item.employee_id.startswith("100") for item in targets))
+        self.assertTrue(all(item.base_target_hours == 181 for item in targets))
 
 
 class MonthlyManagerCapacityTests(unittest.TestCase):
@@ -151,7 +277,28 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         )
 
         self.assertEqual(result.manager_summaries[0].status, AllocationStatus.CAPACITY_DATA_MISSING)
+        self.assertEqual(result.allocation_status, AllocationStatus.CAPACITY_DATA_MISSING)
+        self.assertEqual(result.assignments, ())
+        self.assertEqual(result.total_assigned_hours, 0)
+        self.assertEqual(result.allocation_difference, -5)
         self.assertTrue(any("MANAGER_MONTHLY_CAPACITY_NOT_FOUND" in item for item in result.incidents))
+
+    def test_absent_manager_blocks_allocation_and_rate_optimization(self) -> None:
+        config = add_management_person(BillingConfiguration(), "Gestor Ausente", 100)
+
+        allocated = calculate_sheet_management(self.november, config)
+        optimized = calculate_sheet_rate_optimization(allocated, self.november, config)
+
+        self.assertEqual(
+            allocated.allocation_result.allocation_status,
+            AllocationStatus.CAPACITY_DATA_MISSING,
+        )
+        self.assertEqual(allocated.allocation_result.assignments, ())
+        self.assertTrue(any(
+            "MANAGER_NOT_FOUND_IN_ACTIVE_SHEET" in item
+            for item in allocated.allocation_result.incidents
+        ))
+        self.assertIsNone(optimized.rate_optimization_result)
 
     def test_required_management_above_base_target_reports_exact_overflow(self) -> None:
         result = calculate_management_allocation(
@@ -215,7 +362,7 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         )
         source = replace(
             self.november,
-            people=(*self.november.people, *people),
+            people=people,
             person_monthly_capacities=capacities,
         )
         config = BillingConfiguration()

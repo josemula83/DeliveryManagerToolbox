@@ -7,13 +7,17 @@ from dataclasses import replace
 import math
 
 from delivery_manager_toolbox.modules.facturacion.allocation import calculate_management_allocation
-from delivery_manager_toolbox.modules.facturacion.configuration import BillingConfiguration
+from delivery_manager_toolbox.modules.facturacion.configuration import (
+    BillingConfiguration,
+    resolve_management_people_in_sheet,
+)
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountAssignment,
     AccountBaseHours,
     AccountCatalogItem,
     AccountManagementCalculation,
     AssignmentAuditRecord,
+    AllocationStatus,
     BillingCalculationSummary,
     CalculationType,
     CleanBillingModel,
@@ -36,18 +40,11 @@ def build_clean_billing_model(
     configuration: BillingConfiguration,
 ) -> CleanBillingModel:
     """Crea una copia lógica sin las asignaciones originales de gestores."""
-    management_names = {
-        normalize_identifier(person.name)
-        for person in configuration.management_people
-    }
-    analysis_employee_ids = {
-        normalize_identifier(person.employee_id)
-        for person in analysis.people
-    }
+    resolutions = resolve_management_people_in_sheet(configuration, analysis)
     management_ids = {
-        normalize_identifier(person.employee_id)
-        for person in analysis.people
-        if normalize_identifier(person.name) in management_names
+        normalize_identifier(item.matched_employee_id)
+        for item in resolutions
+        if item.matched_employee_id is not None
     }
     exact_exceptions = {
         _person_account_key(exception.employee_id, exception.account_code)
@@ -65,8 +62,6 @@ def build_clean_billing_model(
         employee_key = normalize_identifier(assignment.person.employee_id)
         name_key = normalize_identifier(assignment.person.name)
         is_management_person = employee_key in management_ids
-        if not is_management_person and employee_key not in analysis_employee_ids:
-            is_management_person = name_key in management_names
         if not is_management_person:
             retained.append(assignment)
             continue
@@ -240,6 +235,11 @@ def calculate_sheet_rate_optimization(
     """Ejecuta tarifas como fase explícita posterior al cálculo y reparto."""
     if result.sheet_name != analysis.sheet_name:
         raise ValueError("El resultado y el análisis deben pertenecer a la misma hoja.")
+    if (
+        result.allocation_result is not None
+        and result.allocation_result.allocation_status == AllocationStatus.CAPACITY_DATA_MISSING
+    ):
+        return result
     return replace(
         result,
         rate_optimization_result=optimize_management_rates(

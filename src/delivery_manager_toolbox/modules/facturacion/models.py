@@ -59,11 +59,19 @@ WorkbookInfo = WorkbookAnalysis
 class Person:
     employee_id: str
     name: str
+    source_row: int | None = None
 
 
 class CapacitySource(StrEnum):
     PERSON_TOTAL_HOURS = "PERSON_TOTAL_HOURS"
     DAILY_HOURS = "DAILY_HOURS"
+
+
+class ManagementPersonMatchingMethod(StrEnum):
+    EXACT_EMPLOYEE_ID = "EXACT_EMPLOYEE_ID"
+    NORMALIZED_NAME = "NORMALIZED_NAME"
+    AMBIGUOUS_NORMALIZED_NAME = "AMBIGUOUS_NORMALIZED_NAME"
+    NOT_FOUND = "NOT_FOUND"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +80,19 @@ class PersonMonthlyWorkCapacity:
     person_name: str
     monthly_workable_hours: float
     capacity_source: CapacitySource
+    source_row: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagementPersonResolution:
+    configured_manager_name: str
+    configured_employee_id: str | None
+    matched_person_name: str | None
+    matched_employee_id: str | None
+    matched_source_row: int | None
+    matching_method: ManagementPersonMatchingMethod
+    monthly_workable_hours: float | None
+    capacity_source: CapacitySource | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +334,7 @@ class ManagerTarget:
     base_target_hours: float
     monthly_workable_hours: float | None = None
     capacity_source: CapacitySource | None = None
+    resolution: ManagementPersonResolution | None = None
 
     @property
     def preferred_min_hours(self) -> float:
@@ -367,6 +389,7 @@ class ManagementAllocationResult:
     incidents: tuple[str, ...] = ()
     total_base_target_hours: float = 0.0
     overflow_hours: float = 0.0
+    management_person_resolutions: tuple[ManagementPersonResolution, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

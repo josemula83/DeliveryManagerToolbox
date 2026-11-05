@@ -51,6 +51,7 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     AllocationStatus,
     CalculationType,
     ManagementAllocationResult,
+    Person,
     RateOptimizationResult,
     SheetAnalysis,
     SheetCalculationResult,
@@ -322,7 +323,7 @@ def _render_configuration(
     analysis: SheetAnalysis | None,
 ) -> None:
     st.subheader("Configuración")
-    detected_people = tuple(person.name for person in analysis.people) if analysis else ()
+    detected_people = analysis.people if analysis else ()
     catalog = analysis.accounts if analysis else ()
     left, right = st.columns(2)
     with left:
@@ -334,13 +335,17 @@ def _render_configuration(
     _render_management_exceptions_section(_configuration(), analysis)
 
 
-def _render_people_section(configuration: BillingConfiguration, detected: tuple[str, ...]) -> None:
-    available_people = available_values(detected, (item.name for item in configuration.management_people))
+def _render_people_section(configuration: BillingConfiguration, detected: tuple[Person, ...]) -> None:
+    available_people = available_values(
+        (person.name for person in detected),
+        (item.name for item in configuration.management_people),
+    )
+    employee_ids = {person.name: person.employee_id for person in detected}
     with st.container(border=True):
         with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
             st.markdown("#### Personas en gestión")
             if st.button("Añadir persona", icon=":material/add:", key="open_add_person"):
-                _add_person_dialog(configuration, available_people)
+                _add_person_dialog(configuration, available_people, employee_ids)
         data = pd.DataFrame([
             {"Persona": item.name, "Capacidad libre (%)": item.free_capacity_percentage, "Eliminar": False}
             for item in configuration.management_people
@@ -544,7 +549,11 @@ def _render_management_exceptions_section(
 
 
 @st.dialog("Añadir persona")
-def _add_person_dialog(configuration: BillingConfiguration, detected: tuple[str, ...]) -> None:
+def _add_person_dialog(
+    configuration: BillingConfiguration,
+    detected: tuple[str, ...],
+    employee_ids: dict[str, str],
+) -> None:
     with st.form("add_management_person", border=False):
         name = st.selectbox(
             "Persona", detected, index=None, accept_new_options=True,
@@ -552,7 +561,15 @@ def _add_person_dialog(configuration: BillingConfiguration, detected: tuple[str,
         )
         percentage = st.number_input("Capacidad libre (%)", min_value=0.0, max_value=100.0, value=0.0, step=0.1)
         if st.form_submit_button("Añadir", icon=":material/add:", type="primary", width="stretch"):
-            _run_action(lambda: add_management_person(configuration, name, percentage), "Persona añadida.")
+            _run_action(
+                lambda: add_management_person(
+                    configuration,
+                    name,
+                    percentage,
+                    employee_ids.get(name),
+                ),
+                "Persona añadida.",
+            )
 
 
 @st.dialog("Añadir cuenta sin gestión")
@@ -993,13 +1010,49 @@ def _render_management_allocation(
         border=True,
         height="stretch",
     )
-    if allocation.overflow_hours:
+    if allocation.allocation_status == AllocationStatus.CAPACITY_DATA_MISSING:
+        affected = ", ".join(
+            item.manager_name
+            for item in allocation.manager_summaries
+            if item.status == AllocationStatus.CAPACITY_DATA_MISSING
+        )
+        st.error(
+            "Reparto bloqueado: hay Personas en Gestión sin jornada mensual resuelta. "
+            f"Revisa la hoja activa y la identidad de: {affected}."
+        )
+    elif allocation.overflow_hours:
         st.info(
             "La gestión supera los objetivos base en "
             f"{_format_hours(allocation.overflow_hours)}; el excedente se reparte equitativamente."
         )
     if allocation.incidents:
         st.warning("\n".join(f"- {incident}" for incident in allocation.incidents))
+
+    if allocation.management_person_resolutions:
+        with st.expander("Auditoría de asociación de Personas en Gestión"):
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Gestor configurado": item.configured_manager_name,
+                        "ID configurado": item.configured_employee_id,
+                        "Persona encontrada": item.matched_person_name,
+                        "ID encontrado": item.matched_employee_id,
+                        "Fila": item.matched_source_row,
+                        "Método": item.matching_method.value,
+                        "Horas laborables mes": item.monthly_workable_hours,
+                        "Origen capacidad": (
+                            item.capacity_source.value if item.capacity_source is not None else None
+                        ),
+                    }
+                    for item in allocation.management_person_resolutions
+                ]),
+                hide_index=True,
+                width="stretch",
+                alt="Auditoría de asociación entre gestores configurados y personas de la hoja",
+                column_config={
+                    "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
+                },
+            )
 
     summary_rows = pd.DataFrame([
         {
