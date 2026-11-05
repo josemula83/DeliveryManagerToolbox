@@ -43,6 +43,15 @@ def workbook_with_capacities() -> bytes:
         worksheet.title = sheet_name
         worksheet.append([None, None, 1, 2, 3, "Horas"])
         worksheet.append([1001, "Daniel Alarcón Guerrero", None, None, None, None])
+        manager_hours = (90, 91) if "noviembre" in sheet_name else (80, 80)
+        worksheet.append([
+            None,
+            "Cliente > Gestión propia > EXT-M - Tarifa 26 EUR",
+            manager_hours[0],
+            manager_hours[1],
+            None,
+            sum(manager_hours),
+        ])
         worksheet.append([2001, "Persona Normal", None, None, None, None])
         worksheet.append([None, "Cliente > Servicio A > EXT-A - Tarifa 26 EUR", 10, 10, None, 20])
     output = BytesIO()
@@ -168,25 +177,6 @@ class ManagementPersonResolutionTests(unittest.TestCase):
         )
         self.assertIsNone(resolution.matched_employee_id)
 
-    def test_all_present_managers_resolve_monthly_hours(self) -> None:
-        records = (
-            ("1001", "Daniel Alarcón Guerrero", 181),
-            ("1002", "Jose Antonio Ferrandez Mula", 181),
-            ("1003", "Pedro Miguel Franco Sarabia", 181),
-            ("1004", "Rafael Juan Guerra", 181),
-        )
-        source = sheet_with_people(*records)
-        config = BillingConfiguration()
-        for _, name, _ in records:
-            config = add_management_person(config, name, 100)
-
-        targets = calculate_manager_targets(991.5, source, config)
-
-        self.assertTrue(all(item.monthly_workable_hours == 181 for item in targets))
-        self.assertTrue(all(item.employee_id.startswith("100") for item in targets))
-        self.assertTrue(all(item.base_target_hours == 181 for item in targets))
-
-
 class MonthlyManagerCapacityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.contents = workbook_with_capacities()
@@ -220,7 +210,7 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         self.assertEqual(target.monthly_workable_hours, 181)
         self.assertEqual(target.base_target_hours, 181)
 
-    def test_all_four_managers_use_the_same_generated_calendar(self) -> None:
+    def test_all_four_managers_use_recorded_service_hours_like_legacy(self) -> None:
         managers = (
             (1001, "Daniel Alarcón Guerrero", 100),
             (1002, "Jose Antonio Ferrandez Mula", 50),
@@ -231,8 +221,15 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         worksheet = workbook.active
         worksheet.title = "Horas servicio noviembre"
         worksheet.append([None, None, 1, 2, 3])
-        for employee_id, name, _ in managers:
+        for index, (employee_id, name, _) in enumerate(managers, 1):
             worksheet.append([employee_id, name, None, None, None])
+            worksheet.append([
+                None,
+                f"Servicio gestor {index} > EXT-M-{index} - Tarifa 26 EUR",
+                90,
+                91,
+                None,
+            ])
         output = BytesIO()
         workbook.save(output)
         workbook.close()
@@ -259,7 +256,7 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         self.assertEqual(targets["Pedro Miguel Franco Sarabia"].base_target_hours, 181)
         self.assertEqual(targets["Rafael Juan Guerra"].base_target_hours, 181)
         self.assertTrue(all(
-            item.resolution.absence_hours == 0
+            item.capacity_source == CapacitySource.LEGACY_RECORDED_HOURS
             for item in targets.values()
         ))
 
@@ -285,7 +282,7 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         december = calculate_manager_targets(100, self.december, config)[0]
 
         self.assertEqual(november.base_target_hours, 181)
-        self.assertEqual(december.base_target_hours, 199)
+        self.assertEqual(december.base_target_hours, 160)
 
     def test_absence_codes_are_subtracted_from_theoretical_calendar(self) -> None:
         workbook = Workbook()
@@ -309,12 +306,14 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         self.assertEqual(capacity.monthly_workable_hours, 154)
         self.assertEqual(capacity.capacity_source, CapacitySource.THEORETICAL_CALENDAR)
 
-    def test_empty_person_header_still_gets_theoretical_capacity(self) -> None:
+    def test_manager_without_service_hours_uses_legacy_reference_maximum(self) -> None:
         workbook = Workbook()
         worksheet = workbook.active
         worksheet.title = "Horas servicio noviembre"
         worksheet.append([None, None, 1, 2, "Horas"])
         worksheet.append([1001, "Daniel Alarcón Guerrero", None, None, None])
+        worksheet.append([2001, "Persona Referencia", None, None, None])
+        worksheet.append([None, "Servicio referencia > EXT-R - Tarifa 26 EUR", 90, 91, 181])
         output = BytesIO()
         workbook.save(output)
         workbook.close()
@@ -331,10 +330,14 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         )
 
         self.assertEqual(result.manager_summaries[0].monthly_workable_hours, 181)
+        self.assertEqual(
+            result.manager_summaries[0].capacity_source,
+            CapacitySource.LEGACY_REFERENCE_HOURS,
+        )
         self.assertEqual(result.total_assigned_hours, 5)
         self.assertEqual(result.allocation_difference, 0)
 
-    def test_absent_manager_blocks_allocation_and_rate_optimization(self) -> None:
+    def test_manual_manager_absent_from_sheet_uses_reference_like_legacy(self) -> None:
         config = add_management_person(BillingConfiguration(), "Gestor Ausente", 100)
 
         allocated = calculate_sheet_management(self.november, config)
@@ -342,14 +345,14 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
 
         self.assertEqual(
             allocated.allocation_result.allocation_status,
-            AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET,
+            AllocationStatus.CAPACITY_OK,
         )
-        self.assertEqual(allocated.allocation_result.assignments, ())
-        self.assertTrue(any(
-            "MANAGER_NOT_FOUND_IN_SHEET" in item
-            for item in allocated.allocation_result.incidents
-        ))
-        self.assertIsNone(optimized.rate_optimization_result)
+        self.assertGreater(allocated.allocation_result.total_assigned_hours, 0)
+        self.assertEqual(
+            allocated.allocation_result.manager_summaries[0].capacity_source,
+            CapacitySource.LEGACY_REFERENCE_HOURS,
+        )
+        self.assertIsNotNone(optimized.rate_optimization_result)
 
     def test_required_management_above_base_target_reports_exact_overflow(self) -> None:
         result = calculate_management_allocation(
@@ -394,7 +397,7 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         self.assertEqual(assigned, {"EXT-A": 100, "EXT-B": 81.5})
         self.assertEqual(result.allocation_difference, 0)
 
-    def test_real_four_manager_example_distributes_358_hour_overflow_equally(self) -> None:
+    def test_real_four_manager_example_uses_legacy_proportional_quotas(self) -> None:
         managers = (
             ("Daniel Alarcón Guerrero", 100),
             ("Jose Antonio Ferrandez Mula", 50),
@@ -437,19 +440,19 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         self.assertEqual(result.total_base_target_hours, 633.5)
         self.assertEqual(result.overflow_hours, 358)
         self.assertEqual(result.allocation_status, AllocationStatus.ABOVE_TARGET_DUE_TO_OVERFLOW)
-        overflow_by_manager = {
-            item.manager_name: item.overflow_hours_assigned
+        assigned_by_manager = {
+            item.manager_name: item.assigned_hours
             for item in result.manager_summaries
         }
-        self.assertEqual(overflow_by_manager, {
-            "Daniel Alarcón Guerrero": 89.5,
-            "Jose Antonio Ferrandez Mula": 89.5,
-            "Pedro Miguel Franco Sarabia": 89.5,
-            "Rafael Juan Guerra": 89.5,
+        self.assertEqual(assigned_by_manager, {
+            "Daniel Alarcón Guerrero": 283.5,
+            "Jose Antonio Ferrandez Mula": 141.5,
+            "Pedro Miguel Franco Sarabia": 283.5,
+            "Rafael Juan Guerra": 283,
         })
         self.assertEqual(sum(item.assigned_hours for item in result.manager_summaries), 991.5)
 
-    def test_complete_account_within_tolerance_is_not_split(self) -> None:
+    def test_legacy_quota_boundary_splits_account_without_tolerance(self) -> None:
         people = (Person("M-1", "Ana"), Person("M-2", "Bea"))
         capacities = tuple(
             PersonMonthlyWorkCapacity(
@@ -475,9 +478,11 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         )
 
         second_account = [item for item in result.assignments if item.account_code == "EXT-002"]
+        first_account = [item for item in result.assignments if item.account_code == "EXT-001"]
         self.assertEqual(len(second_account), 1)
-        self.assertEqual(second_account[0].manager_name, "Ana")
-        self.assertEqual(result.split_account_count, 0)
+        self.assertEqual(second_account[0].manager_name, "Bea")
+        self.assertEqual([item.management_hours for item in first_account], [50.5, 40.5])
+        self.assertEqual(result.split_account_count, 1)
 
 
 if __name__ == "__main__":

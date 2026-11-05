@@ -66,6 +66,8 @@ class CapacitySource(StrEnum):
     PERSON_TOTAL_HOURS = "PERSON_TOTAL_HOURS"
     DAILY_HOURS = "DAILY_HOURS"
     THEORETICAL_CALENDAR = "THEORETICAL_CALENDAR"
+    LEGACY_RECORDED_HOURS = "LEGACY_RECORDED_HOURS"
+    LEGACY_REFERENCE_HOURS = "LEGACY_REFERENCE_HOURS"
 
 
 class ManagementPersonMatchingMethod(StrEnum):
@@ -369,15 +371,6 @@ class ManagerTarget:
     capacity_source: CapacitySource | None = None
     resolution: ManagementPersonResolution | None = None
 
-    @property
-    def preferred_min_hours(self) -> float:
-        return self.base_target_hours * 0.90
-
-    @property
-    def preferred_max_hours(self) -> float:
-        return self.base_target_hours * 1.10
-
-
 @dataclass(frozen=True, slots=True)
 class ManagementAssignment:
     sheet_name: str
@@ -405,9 +398,6 @@ class ManagerAllocationSummary:
     status: AllocationStatus
     monthly_workable_hours: float | None = None
     capacity_source: CapacitySource | None = None
-    preferred_min_hours: float = 0.0
-    preferred_max_hours: float = 0.0
-    overflow_hours_assigned: float = 0.0
 
 @dataclass(frozen=True, slots=True)
 class ManagementAllocationResult:

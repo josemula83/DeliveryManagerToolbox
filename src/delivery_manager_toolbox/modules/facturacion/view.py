@@ -1032,7 +1032,8 @@ def _render_management_allocation(
     elif allocation.overflow_hours:
         st.info(
             "La gestión supera los objetivos base en "
-            f"{_format_hours(allocation.overflow_hours)}; el excedente se reparte equitativamente."
+            f"{_format_hours(allocation.overflow_hours)}; las cuotas proporcionales legacy "
+            "absorben la totalidad."
         )
     if allocation.incidents:
         st.warning("\n".join(f"- {incident}" for incident in allocation.incidents))
@@ -1048,30 +1049,22 @@ def _render_management_allocation(
                         "ID encontrado": item.matched_employee_id,
                         "Fila": item.matched_source_row,
                         "Método": item.matching_method.value,
-                        "Horas laborables mes": item.monthly_workable_hours,
-                        "Origen capacidad": (
-                            item.capacity_source.value if item.capacity_source is not None else None
-                        ),
                     }
                     for item in allocation.management_person_resolutions
                 ]),
                 hide_index=True,
                 width="stretch",
                 alt="Auditoría de asociación entre gestores configurados y personas de la hoja",
-                column_config={
-                    "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
-                },
             )
 
     summary_rows = pd.DataFrame([
         {
             "Gestor": item.manager_name,
             "Capacidad %": item.capacity_percentage,
-            "Horas laborables mes": item.monthly_workable_hours,
+            "Base mensual legacy": item.monthly_workable_hours,
             "Objetivo base": item.base_target_hours,
-            "Rango preferente": f"{item.preferred_min_hours:.2f}–{item.preferred_max_hours:.2f} h",
             "Horas gestión asignadas": item.assigned_hours,
-            "Excedente asignado": item.overflow_hours_assigned,
+            "Diferencia vs objetivo": item.difference_vs_base_target,
             "Nº cuentas": item.accounts_assigned,
             "Estado": item.status.value,
         }
@@ -1084,41 +1077,24 @@ def _render_management_allocation(
         alt="Resumen del reparto de gestión por persona",
         column_config={
             "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
-            "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
+            "Base mensual legacy": st.column_config.NumberColumn(format="%.2f h"),
             "Objetivo base": st.column_config.NumberColumn(format="%.2f h"),
             "Horas gestión asignadas": st.column_config.NumberColumn(format="%.2f h"),
-            "Excedente asignado": st.column_config.NumberColumn(format="%.2f h"),
+            "Diferencia vs objetivo": st.column_config.NumberColumn(format="%.2f h"),
         },
     )
 
-    resolution_by_name = {
-        item.configured_manager_name: item
-        for item in allocation.management_person_resolutions
-    }
     with st.expander("Ver cálculo de capacidad"):
         capacity_rows = pd.DataFrame([
             {
                 "Gestor": item.manager_name,
-                "Periodo": (
-                    f"{resolution_by_name[item.manager_name].work_calendar.month:02d}/"
-                    f"{resolution_by_name[item.manager_name].work_calendar.year}"
-                    if resolution_by_name.get(item.manager_name) is not None
-                    and resolution_by_name[item.manager_name].work_calendar is not None
-                    else allocation.sheet_name
-                ),
-                "Horas teóricas calendario": (
-                    resolution_by_name[item.manager_name].theoretical_monthly_hours
-                    if resolution_by_name.get(item.manager_name) is not None
-                    else None
-                ),
-                "Horas descontadas por ausencias": (
-                    resolution_by_name[item.manager_name].absence_hours
-                    if resolution_by_name.get(item.manager_name) is not None
-                    else None
-                ),
-                "Horas laborables mes": item.monthly_workable_hours,
+                "Hoja": allocation.sheet_name,
+                "Base mensual legacy": item.monthly_workable_hours,
                 "Capacidad %": item.capacity_percentage,
                 "Objetivo base": item.base_target_hours,
+                "Origen": (
+                    item.capacity_source.value if item.capacity_source is not None else None
+                ),
             }
             for item in allocation.manager_summaries
         ])
@@ -1128,43 +1104,11 @@ def _render_management_allocation(
             width="stretch",
             alt="Origen y cálculo del objetivo base mensual por gestor",
             column_config={
-                "Horas teóricas calendario": st.column_config.NumberColumn(format="%.2f h"),
-                "Horas descontadas por ausencias": st.column_config.NumberColumn(format="%.2f h"),
-                "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
+                "Base mensual legacy": st.column_config.NumberColumn(format="%.2f h"),
                 "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
                 "Objetivo base": st.column_config.NumberColumn(format="%.2f h"),
             },
         )
-
-    calendars = tuple(
-        resolution.work_calendar
-        for resolution in allocation.management_person_resolutions
-        if resolution.work_calendar is not None
-    )
-    if calendars:
-        with st.expander("Ver calendario de capacidad"):
-            st.dataframe(
-                pd.DataFrame([
-                    {
-                        "Gestor": work_calendar.manager_name,
-                        "Día": day.day,
-                        "Fecha": day.date_label,
-                        "Día semana": day.weekday_name,
-                        "Horas teóricas": day.theoretical_hours,
-                        "Código ausencia": day.absence_code or "-",
-                        "Horas capacidad final": day.capacity_hours,
-                    }
-                    for work_calendar in calendars
-                    for day in work_calendar.daily_capacity
-                ]),
-                hide_index=True,
-                width="stretch",
-                alt="Calendario diario de capacidad laboral por gestor",
-                column_config={
-                    "Horas teóricas": st.column_config.NumberColumn(format="%.2f h"),
-                    "Horas capacidad final": st.column_config.NumberColumn(format="%.2f h"),
-                },
-            )
 
     st.markdown("##### Detalle del reparto")
     manager_options = tuple(item.manager_name for item in allocation.manager_summaries)

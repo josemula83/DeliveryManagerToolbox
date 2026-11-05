@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import replace
 import math
 import re
 
@@ -15,6 +14,7 @@ from delivery_manager_toolbox.modules.facturacion.configuration import (
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountManagementCalculation,
     AllocationStatus,
+    CapacitySource,
     ManagementAllocationResult,
     ManagementAssignment,
     ManagerAllocationSummary,
@@ -22,12 +22,10 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     SheetAnalysis,
 )
 from delivery_manager_toolbox.modules.facturacion.validation import normalize_identifier
-from delivery_manager_toolbox.modules.facturacion.work_calendar import calculate_manager_base_target
 
 
 ALLOCATION_STEP = 0.5
 _FLOAT_TOLERANCE = 1e-9
-_NATURAL_PART = re.compile(r"(\d+)")
 
 
 def calculate_manager_targets(
@@ -44,30 +42,34 @@ def calculate_manager_targets(
         normalize_identifier(item.configured_manager_name): item
         for item in resolve_management_people_in_sheet(configuration, analysis)
     }
+    hours_by_employee: dict[str, float] = defaultdict(float)
+    for assignment in analysis.assignments:
+        hours_by_employee[normalize_identifier(assignment.person.employee_id)] += assignment.total_hours
+    reference_hours = max((0.0, *hours_by_employee.values()))
 
     targets: list[ManagerTarget] = []
     for item in configured:
         resolution = resolutions[normalize_identifier(item.name)]
-        monthly_workable_hours = resolution.monthly_workable_hours
-        base_target_hours = (
-            calculate_manager_base_target(
-                monthly_workable_hours,
-                item.free_capacity_percentage,
-            )
-            if monthly_workable_hours is not None
-            else 0.0
+        employee_id = (
+            resolution.matched_employee_id
+            or resolution.configured_employee_id
+            or item.name
         )
+        recorded_hours = hours_by_employee.get(normalize_identifier(employee_id), 0.0)
+        monthly_workable_hours = recorded_hours or reference_hours
+        capacity_source = (
+            CapacitySource.LEGACY_RECORDED_HOURS
+            if abs(recorded_hours) > _FLOAT_TOLERANCE
+            else CapacitySource.LEGACY_REFERENCE_HOURS
+        )
+        base_target_hours = monthly_workable_hours * item.free_capacity_percentage / 100
         targets.append(ManagerTarget(
-            employee_id=(
-                resolution.matched_employee_id
-                or resolution.configured_employee_id
-                or item.name
-            ),
+            employee_id=employee_id,
             manager_name=item.name,
             capacity_percentage=item.free_capacity_percentage,
             base_target_hours=base_target_hours,
             monthly_workable_hours=monthly_workable_hours,
-            capacity_source=resolution.capacity_source,
+            capacity_source=capacity_source,
             resolution=resolution,
         ))
     return tuple(targets)
@@ -78,11 +80,11 @@ def allocate_accounts_to_managers(
     calculations: Iterable[AccountManagementCalculation],
     targets: Iterable[ManagerTarget],
 ) -> tuple[ManagementAssignment, ...]:
-    """Asigna cuentas secuencialmente, priorizando estabilidad y objetivos operativos."""
+    """Porta el reparto secuencial por cuotas proporcionales del HTML legacy."""
     account_records = tuple(
         sorted(
             (item for item in calculations if item.management_hours > 0),
-            key=lambda item: _natural_key(item.account_code),
+            key=lambda item: _legacy_account_key(item.account_code, item.service_name),
         )
     )
     manager_targets = tuple(targets)
@@ -91,46 +93,20 @@ def allocate_accounts_to_managers(
     assignments: list[ManagementAssignment] = []
     assigned_units = [0 for _ in manager_targets]
     manager_index = 0
-    has_overflow = total_units * ALLOCATION_STEP > sum(
-        item.base_target_hours for item in manager_targets
-    ) + _FLOAT_TOLERANCE
 
     for account in account_records:
         account_remaining = _to_units(account.management_hours)
         while account_remaining:
             if manager_index >= len(manager_targets):
                 raise ValueError("No hay Personas en Gestión para completar el reparto.")
+            quota_remaining = max(manager_units[manager_index] - assigned_units[manager_index], 0)
             if manager_index == len(manager_targets) - 1:
                 allocated_units = account_remaining
+            elif quota_remaining <= 0:
+                manager_index += 1
+                continue
             else:
-                target = manager_targets[manager_index]
-                goal_remaining = max(manager_units[manager_index] - assigned_units[manager_index], 0)
-                if account_remaining <= goal_remaining:
-                    allocated_units = account_remaining
-                elif not has_overflow:
-                    preferred_max_units = math.floor(
-                        target.preferred_max_hours / ALLOCATION_STEP + _FLOAT_TOLERANCE
-                    )
-                    preferred_min_units = math.ceil(
-                        target.preferred_min_hours / ALLOCATION_STEP - _FLOAT_TOLERANCE
-                    )
-                    if assigned_units[manager_index] + account_remaining <= preferred_max_units:
-                        allocated_units = account_remaining
-                    elif assigned_units[manager_index] >= preferred_min_units:
-                        manager_index += 1
-                        continue
-                    else:
-                        allocated_units = min(account_remaining, goal_remaining)
-                else:
-                    overshoot = assigned_units[manager_index] + account_remaining - manager_units[manager_index]
-                    undershoot = manager_units[manager_index] - assigned_units[manager_index]
-                    if overshoot <= undershoot:
-                        allocated_units = account_remaining
-                    elif goal_remaining:
-                        allocated_units = min(account_remaining, goal_remaining)
-                    else:
-                        manager_index += 1
-                        continue
+                allocated_units = max(1, min(account_remaining, quota_remaining))
             if allocated_units <= 0:
                 manager_index += 1
                 continue
@@ -158,72 +134,9 @@ def rebalance_allocations(
     assignments: Iterable[ManagementAssignment],
     targets: Iterable[ManagerTarget],
 ) -> tuple[ManagementAssignment, ...]:
-    """Acerca el reparto a sus objetivos operativos sin deshacer cuentas estables."""
-    records = list(assignments)
-    manager_targets = tuple(targets)
-    if not records or not manager_targets:
-        return tuple(records)
-
-    employee_by_manager = {item.manager_name: item.employee_id for item in manager_targets}
-    assigned = _assigned_hours_by_manager(records)
-    total_units = sum(_to_units(item.management_hours) for item in records)
-    goal_units = _manager_goal_units(total_units, manager_targets)
-    goals = {
-        target.manager_name: _from_units(goal_units[index])
-        for index, target in enumerate(manager_targets)
-    }
-
-    moved = True
-    while moved:
-        moved = False
-        donors = sorted(
-            manager_targets,
-            key=lambda item: (assigned[item.manager_name] - goals[item.manager_name], normalize_identifier(item.manager_name)),
-            reverse=True,
-        )
-        receivers = sorted(
-            manager_targets,
-            key=lambda item: (assigned[item.manager_name] - goals[item.manager_name], normalize_identifier(item.manager_name)),
-        )
-        for donor in donors:
-            if assigned[donor.manager_name] <= goals[donor.manager_name] + _FLOAT_TOLERANCE:
-                continue
-            for receiver in receivers:
-                if receiver.manager_name == donor.manager_name:
-                    continue
-                if assigned[receiver.manager_name] >= goals[receiver.manager_name] - _FLOAT_TOLERANCE:
-                    continue
-                candidate_assigned = dict(assigned)
-                candidate_assigned[donor.manager_name] -= ALLOCATION_STEP
-                candidate_assigned[receiver.manager_name] += ALLOCATION_STEP
-                if _total_absolute_deviation(candidate_assigned, goals) >= _total_absolute_deviation(assigned, goals):
-                    continue
-                receiver_accounts = {
-                    item.account_code for item in records if item.manager_name == receiver.manager_name
-                }
-                donor_index = _transferable_assignment_index(records, donor.manager_name, receiver.manager_name)
-                if donor_index is None:
-                    continue
-                donor_record = records[donor_index]
-                if (
-                    donor_record.account_code not in receiver_accounts
-                    and assigned[donor.manager_name] <= donor.preferred_max_hours + _FLOAT_TOLERANCE
-                ):
-                    continue
-                _transfer_half_hour(
-                    records,
-                    donor_index,
-                    receiver.manager_name,
-                    employee_by_manager[receiver.manager_name],
-                )
-                records = _merge_assignments(records)
-                assigned[donor.manager_name] -= ALLOCATION_STEP
-                assigned[receiver.manager_name] += ALLOCATION_STEP
-                moved = True
-                break
-            if moved:
-                break
-    return tuple(records)
+    """El HTML legacy no ejecuta una segunda pasada sobre el reparto de gestión."""
+    del targets
+    return tuple(assignments)
 
 
 def validate_allocation(
@@ -272,16 +185,13 @@ def build_manager_summary(
             if target.base_target_hours > _FLOAT_TOLERANCE
             else 0.0
         )
-        if (
-            target.resolution is not None
-            and target.resolution.matched_employee_id is None
-        ):
-            status = AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET
-        elif target.monthly_workable_hours is None:
-            status = AllocationStatus.CAPACITY_DATA_MISSING
-        elif assigned_hours > target.base_target_hours + _FLOAT_TOLERANCE:
+        if assigned_hours > target.base_target_hours + _FLOAT_TOLERANCE:
             status = AllocationStatus.ABOVE_TARGET_DUE_TO_OVERFLOW
-        elif assigned_hours + _FLOAT_TOLERANCE >= target.preferred_min_hours:
+        elif math.isclose(
+            assigned_hours,
+            target.base_target_hours,
+            abs_tol=_FLOAT_TOLERANCE,
+        ):
             status = AllocationStatus.WITHIN_TARGET
         else:
             status = AllocationStatus.BELOW_TARGET
@@ -297,9 +207,6 @@ def build_manager_summary(
             status=status,
             monthly_workable_hours=target.monthly_workable_hours,
             capacity_source=target.capacity_source,
-            preferred_min_hours=target.preferred_min_hours,
-            preferred_max_hours=target.preferred_max_hours,
-            overflow_hours_assigned=max(assigned_hours - target.base_target_hours, 0.0),
         ))
     return tuple(summaries)
 
@@ -314,39 +221,10 @@ def calculate_management_allocation(
     targets = calculate_manager_targets(total_management_hours, analysis, configuration)
     if total_management_hours > 0 and not targets:
         return None
-    missing_targets = tuple(
-        target for target in targets if target.monthly_workable_hours is None
-    )
-    if missing_targets:
-        summaries = build_manager_summary(targets, ())
-        incidents = tuple(_missing_capacity_incident(target) for target in missing_targets)
-        missing_manager = any(
-            target.resolution is not None
-            and target.resolution.matched_employee_id is None
-            for target in missing_targets
-        )
-        return ManagementAllocationResult(
-            sheet_name=analysis.sheet_name,
-            assignments=(),
-            manager_summaries=summaries,
-            total_management_hours=total_management_hours,
-            total_assigned_hours=0.0,
-            allocation_difference=-total_management_hours,
-            allocation_status=(
-                AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET
-                if missing_manager
-                else AllocationStatus.CAPACITY_DATA_MISSING
-            ),
-            split_account_count=0,
-            incidents=incidents,
-            total_base_target_hours=sum(item.base_target_hours for item in targets),
-            overflow_hours=0.0,
-            management_person_resolutions=tuple(
-                item.resolution for item in targets if item.resolution is not None
-            ),
-        )
+    if total_management_hours > 0 and sum(item.base_target_hours for item in targets) <= 0:
+        raise ValueError("La capacidad objetivo total de los responsables debe ser mayor que 0%.")
     initial = allocate_accounts_to_managers(analysis.sheet_name, records, targets)
-    assignments = rebalance_allocations(initial, targets)
+    assignments = initial
     allocation_difference = validate_allocation(records, assignments)
     summaries = build_manager_summary(targets, assignments)
     total_assigned_hours = sum(item.management_hours for item in assignments)
@@ -380,44 +258,19 @@ def calculate_management_allocation(
     )
 
 
-def _missing_capacity_incident(target: ManagerTarget) -> str:
-    resolution = target.resolution
-    if resolution is None or resolution.matched_employee_id is None:
-        return (
-            "MANAGER_NOT_FOUND_IN_SHEET: "
-            f"{target.manager_name}. Gestor no localizado en la hoja activa."
-        )
-    return (
-        "MANAGER_MONTHLY_CAPACITY_NOT_FOUND: "
-        f"{target.manager_name}. No se ha podido determinar su jornada mensual."
-    )
-
-
 def _manager_goal_units(total_units: int, targets: tuple[ManagerTarget, ...]) -> tuple[int, ...]:
     if total_units == 0:
         return tuple(0 for _ in targets)
     if not targets:
         return ()
-    total_hours = _from_units(total_units)
     total_base_target = sum(target.base_target_hours for target in targets)
-    if total_hours > total_base_target + _FLOAT_TOLERANCE:
-        overflow_share = (total_hours - total_base_target) / len(targets)
-        desired_units = [
-            (target.base_target_hours + overflow_share) / ALLOCATION_STEP
-            for target in targets
-        ]
-        return _round_units_to_total(desired_units, total_units, targets)
-
-    result: list[int] = []
-    remaining = total_units
-    for target in targets:
-        desired = round(target.base_target_hours / ALLOCATION_STEP)
-        assigned = min(desired, remaining)
-        result.append(assigned)
-        remaining -= assigned
-    if remaining:
-        result[-1] += remaining
-    return tuple(result)
+    if total_base_target <= _FLOAT_TOLERANCE:
+        return tuple(0 for _ in targets)
+    desired_units = [
+        total_units * target.base_target_hours / total_base_target
+        for target in targets
+    ]
+    return _round_units_to_total(desired_units, total_units, targets)
 
 
 def _round_units_to_total(
@@ -439,74 +292,11 @@ def _round_units_to_total(
     return tuple(rounded)
 
 
-def _transferable_assignment_index(
-    records: list[ManagementAssignment],
-    donor_name: str,
-    receiver_name: str,
-) -> int | None:
-    receiver_accounts = {
-        item.account_code for item in records if item.manager_name == receiver_name
-    }
-    candidates = [
-        (index, item)
-        for index, item in enumerate(records)
-        if item.manager_name == donor_name and item.management_hours >= ALLOCATION_STEP
-    ]
-    candidates.sort(key=lambda pair: (
-        pair[1].account_code not in receiver_accounts,
-        _natural_key(pair[1].account_code),
-    ))
-    return candidates[0][0] if candidates else None
-
-
-def _transfer_half_hour(
-    records: list[ManagementAssignment],
-    donor_index: int,
-    receiver_name: str,
-    receiver_employee_id: str,
-) -> None:
-    donor = records[donor_index]
-    if math.isclose(donor.management_hours, ALLOCATION_STEP, abs_tol=_FLOAT_TOLERANCE):
-        records.pop(donor_index)
-    else:
-        records[donor_index] = replace(
-            donor,
-            management_hours=donor.management_hours - ALLOCATION_STEP,
-        )
-    records.append(replace(
-        donor,
-        employee_id=receiver_employee_id,
-        manager_name=receiver_name,
-        management_hours=ALLOCATION_STEP,
-    ))
-
-
-def _merge_assignments(records: Iterable[ManagementAssignment]) -> list[ManagementAssignment]:
-    merged: dict[tuple[str, str], ManagementAssignment] = {}
-    for item in records:
-        key = (item.manager_name, item.account_code)
-        if key in merged:
-            merged[key] = replace(
-                merged[key],
-                management_hours=merged[key].management_hours + item.management_hours,
-            )
-        else:
-            merged[key] = item
-    return sorted(
-        merged.values(),
-        key=lambda item: (normalize_identifier(item.manager_name), _natural_key(item.account_code)),
-    )
-
-
 def _assigned_hours_by_manager(assignments: Iterable[ManagementAssignment]) -> dict[str, float]:
     result: dict[str, float] = defaultdict(float)
     for item in assignments:
         result[item.manager_name] += item.management_hours
     return result
-
-
-def _total_absolute_deviation(assigned: dict[str, float], targets: dict[str, float]) -> float:
-    return sum(abs(assigned[name] - target) for name, target in targets.items())
 
 
 def _to_units(hours: float) -> int:
@@ -520,12 +310,9 @@ def _from_units(units: int) -> float:
     return units * ALLOCATION_STEP
 
 
-def _natural_key(value: str) -> tuple[tuple[int, object], ...]:
-    return tuple(
-        (0, int(part)) if part.isdigit() else (1, part.casefold())
-        for part in _NATURAL_PART.split(value)
-        if part
-    )
+def _legacy_account_key(account_code: str, service_name: str) -> tuple[tuple[int, ...], str]:
+    numeric_parts = tuple(int(part) for part in re.findall(r"\d+", account_code or service_name))
+    return numeric_parts, normalize_identifier(service_name)
 
 
 __all__ = [

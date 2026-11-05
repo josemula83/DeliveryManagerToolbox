@@ -102,7 +102,7 @@ class ManagerAllocationTests(unittest.TestCase):
         self.assertEqual(result.assignments[0].management_hours, 10)
         self.assertEqual(result.manager_summaries[0].assigned_hours, 10)
 
-    def test_two_equal_managers_are_not_forced_to_split_fifty_fifty(self) -> None:
+    def test_two_equal_managers_receive_equal_legacy_quotas(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea")
         result = calculate_management_allocation(
             source,
@@ -110,8 +110,8 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 100), ("Bea", 100)),
         )
 
-        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [181, 181])
-        self.assertEqual([item.assigned_hours for item in result.manager_summaries], [20, 0])
+        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [100, 100])
+        self.assertEqual([item.assigned_hours for item in result.manager_summaries], [10, 10])
 
     def test_percentages_apply_to_each_manager_monthly_hours(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea")
@@ -121,8 +121,8 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 50), ("Bea", 100)),
         )
 
-        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [90.5, 181])
-        self.assertEqual([item.assigned_hours for item in result.manager_summaries], [30, 0])
+        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [50, 100])
+        self.assertEqual([item.assigned_hours for item in result.manager_summaries], [10, 20])
 
     def test_four_manager_capacities_do_not_depend_on_total_management(self) -> None:
         source = analysis("Noviembre", "Daniel", "Jose", "Pedro", "Rafael")
@@ -133,10 +133,10 @@ class ManagerAllocationTests(unittest.TestCase):
         )
 
         by_name = {item.manager_name: item.base_target_hours for item in targets}
-        self.assertEqual(by_name["Jose"], 90.5)
-        self.assertEqual(by_name["Pedro"], 181)
-        self.assertEqual(by_name["Rafael"], 181)
-        self.assertEqual(by_name["Daniel"], 181)
+        self.assertEqual(by_name["Jose"], 50)
+        self.assertEqual(by_name["Pedro"], 100)
+        self.assertEqual(by_name["Rafael"], 100)
+        self.assertEqual(by_name["Daniel"], 100)
 
     def test_total_is_exact_and_every_assignment_uses_half_hour_steps(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea", "Carla")
@@ -226,7 +226,7 @@ class ManagerAllocationTests(unittest.TestCase):
         self.assertTrue(all(item.sheet_name == "Noviembre" for item in november.allocation_result.assignments))
         self.assertTrue(all(item.sheet_name == "Diciembre" for item in december.allocation_result.assignments))
 
-    def test_overflow_is_reported_and_total_still_matches(self) -> None:
+    def test_largest_remainder_assigns_single_half_hour_deterministically(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea", monthly_hours=0)
         result = calculate_management_allocation(
             source,
@@ -234,14 +234,14 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 100), ("Bea", 100)),
         )
 
-        self.assertEqual(result.allocation_status, AllocationStatus.ABOVE_TARGET_DUE_TO_OVERFLOW)
+        self.assertEqual(result.allocation_status, AllocationStatus.CAPACITY_OK)
         self.assertEqual(result.total_assigned_hours, 0.5)
         self.assertEqual(result.allocation_difference, 0)
-        self.assertEqual(result.overflow_hours, 0.5)
-        self.assertTrue(any(
-            item.status == AllocationStatus.ABOVE_TARGET_DUE_TO_OVERFLOW
-            for item in result.manager_summaries
-        ))
+        self.assertEqual(result.overflow_hours, 0)
+        self.assertEqual(
+            [item.assigned_hours for item in result.manager_summaries],
+            [0.5, 0],
+        )
 
     def test_rate_optimization_runs_only_in_explicit_later_phase(self) -> None:
         source = analysis("Noviembre", "Ana")
@@ -257,7 +257,7 @@ class ManagerAllocationTests(unittest.TestCase):
             allocated.allocation_result.total_assigned_hours,
         )
 
-    def test_rebalance_never_increases_total_deviation(self) -> None:
+    def test_legacy_rebalance_is_a_no_op(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea", "Carla")
         calculations = (calculation("EXT-1", 2.5), calculation("EXT-2", 7.5))
         config = configuration(("Ana", 50), ("Bea", 100), ("Carla", 100))
@@ -266,19 +266,8 @@ class ManagerAllocationTests(unittest.TestCase):
 
         rebalanced = rebalance_allocations(initial, targets)
 
-        target_by_name = {item.manager_name: item.base_target_hours for item in targets}
-        self.assertLessEqual(
-            self._deviation(rebalanced, target_by_name),
-            self._deviation(initial, target_by_name),
-        )
+        self.assertEqual(rebalanced, initial)
         self.assertEqual(validate_allocation(calculations, rebalanced), 0)
-
-    @staticmethod
-    def _deviation(assignments, targets) -> float:
-        assigned = {name: 0.0 for name in targets}
-        for item in assignments:
-            assigned[item.manager_name] += item.management_hours
-        return sum(abs(assigned[name] - target) for name, target in targets.items())
 
 
 if __name__ == "__main__":
