@@ -50,6 +50,7 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     AllocationStatus,
     CalculationType,
     ManagementAllocationResult,
+    RateOptimizationResult,
     SheetAnalysis,
     SheetCalculationResult,
     SkippedSheet,
@@ -171,7 +172,7 @@ def render_page() -> None:
     workbook_result = st.session_state.get(_WORKBOOK_RESULT_KEY)
     has_result = result is not None or workbook_result is not None
     st.caption(
-        "Cálculo y reparto completados; la optimización de tarifas sigue pendiente."
+        "Cálculo, reparto y tarifas completados; el Excel final sigue pendiente."
         if has_result else
         "Excel preparado para calcular." if workbook_info else
         "Carga un Excel para iniciar el análisis."
@@ -921,6 +922,7 @@ def _render_sheet_calculation_output(
     )
 
     _render_management_allocation(result.allocation_result, result.incidents, key_suffix)
+    _render_rate_optimization(result.rate_optimization_result, key_suffix)
 
     with st.expander("Ver limpieza del modelo"):
         st.markdown("##### Asignaciones eliminadas")
@@ -940,7 +942,7 @@ def _render_sheet_calculation_output(
             column_config={"Horas": st.column_config.NumberColumn(format="%.2f h")},
         )
 
-    st.caption("La optimización de tarifas y el Excel final siguen pendientes.")
+    st.caption("La generación del Excel final sigue pendiente.")
 
 
 def _render_management_allocation(
@@ -1045,6 +1047,97 @@ def _render_management_allocation(
         width="stretch",
         alt="Asignaciones de horas de gestión por persona y cuenta",
         column_config={"Horas gestión": st.column_config.NumberColumn(format="%.2f h")},
+    )
+
+
+def _render_rate_optimization(
+    optimization: RateOptimizationResult | None,
+    key_suffix: str,
+) -> None:
+    st.markdown("#### Optimización de tarifas")
+    if optimization is None:
+        st.info("El reparto debe completarse antes de aplicar tarifas de gestión.")
+        return
+
+    summary = optimization.billing_summary
+    metrics = st.columns(5)
+    metrics[0].metric(
+        "Tarifa media",
+        f"{summary.weighted_average_rate:.2f} €/h" if summary.weighted_average_rate is not None else "Sin tarifa",
+        border=True,
+        height="stretch",
+    )
+    metrics[1].metric(
+        "Importe total gestión",
+        f"{summary.total_management_amount:.2f} €",
+        border=True,
+        height="stretch",
+    )
+    metrics[2].metric(
+        "Cuentas con bloque",
+        summary.configured_block_accounts,
+        border=True,
+        height="stretch",
+    )
+    metrics[3].metric(
+        "Cuentas optimizadas",
+        summary.automatically_optimized_accounts,
+        border=True,
+        height="stretch",
+    )
+    metrics[4].metric(
+        "Incidencias",
+        len(optimization.incidents),
+        border=True,
+        height="stretch",
+    )
+    if optimization.incidents:
+        details = "\n".join(
+            f"- **{item.code.value}:** {item.message}"
+            for item in optimization.incidents
+        )
+        st.warning(f"Incidencias de tarifas:\n{details}")
+
+    rows = pd.DataFrame([
+        {
+            "Gestor": item.manager_name,
+            "Cuenta": item.account_code,
+            "Horas": item.management_hours,
+            "Tarifa": item.management_rate,
+            "Importe": item.amount,
+            "Origen tarifa": item.rate_source.value if item.rate_source is not None else "SIN TARIFA",
+            "Estado": item.rate_status,
+        }
+        for item in optimization.assignments
+    ], columns=["Gestor", "Cuenta", "Horas", "Tarifa", "Importe", "Origen tarifa", "Estado"])
+    manager_options = tuple(item.manager_name for item in optimization.manager_summaries)
+    with st.container(horizontal=True, vertical_alignment="bottom"):
+        selected_managers = st.multiselect(
+            "Filtrar tarifas por gestor",
+            manager_options,
+            placeholder="Todos",
+            key=f"rate_managers{key_suffix}",
+        )
+        account_search = st.text_input(
+            "Filtrar tarifas por cuenta",
+            type="search",
+            placeholder="Código de cuenta",
+            key=f"rate_account{key_suffix}",
+        )
+    if selected_managers:
+        rows = rows[rows["Gestor"].isin(selected_managers)]
+    if account_search:
+        rows = rows[rows["Cuenta"].str.casefold().str.contains(account_search.casefold(), regex=False)]
+    st.dataframe(
+        rows,
+        hide_index=True,
+        width="stretch",
+        alt="Tarifas e importes de las asignaciones de gestión",
+        column_config={
+            "Horas": st.column_config.NumberColumn(format="%.2f h"),
+            "Tarifa": st.column_config.NumberColumn(format="%.2f €/h"),
+            "Importe": st.column_config.NumberColumn(format="%.2f €"),
+        },
     )
 
 

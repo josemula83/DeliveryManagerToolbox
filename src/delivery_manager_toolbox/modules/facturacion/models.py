@@ -273,6 +273,19 @@ class AllocationStatus(StrEnum):
     OUTSIDE_TOLERANCE = "OUTSIDE_TOLERANCE"
 
 
+class RateSource(StrEnum):
+    CONFIGURED_BLOCK = "CONFIGURED_BLOCK"
+    ACCOUNT_RATE = "ACCOUNT_RATE"
+    OPTIMIZED_RATE = "OPTIMIZED_RATE"
+
+
+class RateIncidentCode(StrEnum):
+    NO_RATE_FOUND = "NO_RATE_FOUND"
+    MULTIPLE_RATE_EXCEPTION = "MULTIPLE_RATE_EXCEPTION"
+    RATE_CONSTRAINT = "RATE_CONSTRAINT"
+    OUTSIDE_TOLERANCE_AFTER_OPTIMIZATION = "OUTSIDE_TOLERANCE_AFTER_OPTIMIZATION"
+
+
 @dataclass(frozen=True, slots=True)
 class ManagerTarget:
     employee_id: str
@@ -289,6 +302,10 @@ class ManagementAssignment:
     account_code: str
     service_name: str
     management_hours: float
+    management_rate: float | None = None
+    rate_source: RateSource | None = None
+    amount: float | None = None
+    rate_status: str = "PENDING"
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +334,56 @@ class ManagementAllocationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RateOptimizationIncident:
+    code: RateIncidentCode
+    message: str
+    account_code: str | None = None
+    manager_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerBillingSummary:
+    employee_id: str
+    manager_name: str
+    management_hours: float
+    management_amount: float
+    average_rate: float | None
+    accounts_assigned: int
+
+
+@dataclass(frozen=True, slots=True)
+class AccountBillingSummary:
+    account_code: str
+    service_name: str
+    management_hours: float
+    management_rate: float | None
+    management_amount: float
+    managers_assigned: int
+    rate_source: RateSource | None
+
+
+@dataclass(frozen=True, slots=True)
+class RateBillingSummary:
+    total_management_hours: float
+    total_management_amount: float
+    weighted_average_rate: float | None
+    configured_block_accounts: int
+    automatically_optimized_accounts: int
+    multiple_rate_incidents: int
+
+
+@dataclass(frozen=True, slots=True)
+class RateOptimizationResult:
+    sheet_name: str
+    assignments: tuple[ManagementAssignment, ...]
+    manager_summaries: tuple[ManagerBillingSummary, ...]
+    account_summaries: tuple[AccountBillingSummary, ...]
+    billing_summary: RateBillingSummary
+    incidents: tuple[RateOptimizationIncident, ...]
+    consolidated_record_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class SheetCalculationResult:
     """Resultado de la primera fase asociado inequívocamente a un período."""
 
@@ -325,6 +392,7 @@ class SheetCalculationResult:
     account_calculations: tuple[AccountManagementCalculation, ...]
     clean_model: CleanBillingModel
     allocation_result: ManagementAllocationResult | None = None
+    rate_optimization_result: RateOptimizationResult | None = None
     incidents: tuple[str, ...] = ()
 
     @property
@@ -335,6 +403,14 @@ class SheetCalculationResult:
     @property
     def audit(self) -> CleanModelAuditSummary:
         return self.clean_model.audit
+
+    @property
+    def billing_summary(self) -> RateBillingSummary | None:
+        return (
+            self.rate_optimization_result.billing_summary
+            if self.rate_optimization_result is not None
+            else None
+        )
 
 
 @dataclass(frozen=True, slots=True)

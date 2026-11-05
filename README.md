@@ -94,6 +94,8 @@ La interfaz permite calcular solo la hoja seleccionada o todas las hojas compati
 
 Después de calcular las horas de gestión por cuenta, el motor las reparte entre las Personas en Gestión según el peso relativo de su capacidad libre. El reparto usa escalones de 0,5 h, ordena gestores y cuentas de forma determinista, conserva las cuentas completas cuando sus límites lo permiten y divide una cuenta solo al cruzar la cuota de un gestor. Un barrido final acepta únicamente movimientos que reduzcan la desviación. Cada resultado mensual incluye objetivos, asignaciones, desviaciones, estado respecto a la tolerancia de ±10 %, cuentas divididas y una validación de cuadre exacto.
 
+La fase de tarifas toma esas asignaciones sin cambiar sus horas. Una tarifa de bloque configurada tiene prioridad; para las demás cuentas se usa la tarifa máxima detectada en la hoja activa. Los registros del mismo gestor y cuenta se consolidan con una única tarifa, se calculan importes y tarifas medias ponderadas, y las cuentas sin tarifa producen incidencias explícitas. Las tarifas nunca se comparten entre meses.
+
 Responsabilidades internas:
 
 - `view.py`: interfaz y estado de sesión;
@@ -102,9 +104,11 @@ Responsabilidades internas:
 - `configuration.py`: modelo de configuración, operaciones y persistencia JSON;
 - `validation.py`: reglas de validación y normalización;
 - `business.py`: limpieza auditable, agregación de horas base y cálculo de gestión por cuenta;
+- `allocation.py`: objetivos, reparto, rebalanceo y cuadre de horas entre gestores;
+- `rate_optimization.py`: selección, consolidación y resumen de tarifas e importes;
 - `exporter.py`: punto de extensión para el futuro Excel de salida.
 
-La optimización de tarifas y `exporter.py` siguen deliberadamente pendientes. La interfaz consume contratos estables para que esas reglas futuras puedan añadirse sin rediseñarla.
+La generación del Excel final mediante `exporter.py` sigue deliberadamente pendiente. La interfaz consume contratos estables para que esa fase futura pueda añadirse sin rediseñarla.
 
 ## Comprobaciones
 

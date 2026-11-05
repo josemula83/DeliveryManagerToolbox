@@ -24,6 +24,7 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     WorkbookCalculationResult,
 )
 from delivery_manager_toolbox.modules.facturacion.validation import normalize_identifier
+from delivery_manager_toolbox.modules.facturacion.rate_optimization import optimize_management_rates
 
 
 MANAGEMENT_PERCENTAGE = 5.0
@@ -216,6 +217,11 @@ def calculate_sheet_management(
     calculations = calculate_all_accounts(base_hours, configuration)
     summary = build_calculation_summary(calculations, clean_model.audit)
     allocation_result = calculate_management_allocation(analysis, calculations, configuration)
+    rate_optimization_result = optimize_management_rates(
+        analysis,
+        allocation_result,
+        configuration,
+    )
     incidents = (
         ("No se pudo repartir la gestión: configura al menos una Persona en Gestión con capacidad positiva.",)
         if summary.total_management_hours > 0 and allocation_result is None
@@ -227,6 +233,7 @@ def calculate_sheet_management(
         account_calculations=calculations,
         clean_model=clean_model,
         allocation_result=allocation_result,
+        rate_optimization_result=rate_optimization_result,
         incidents=incidents,
     )
 
