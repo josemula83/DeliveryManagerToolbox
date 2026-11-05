@@ -461,6 +461,9 @@ def _render_management_rate_blocks_section(
             st.markdown("#### Bloques de tarifa de gestión")
             if st.button("Añadir bloque", icon=":material/add:", key="open_add_rate_block"):
                 _management_rate_block_dialog(configuration, labels)
+        st.caption(
+            "La tarifa configurada es la base legacy. El cálculo puede facturarla a x1, x2 o x2,5."
+        )
         if not configuration.management_rate_blocks:
             st.caption("No hay bloques configurados.")
         for block in configuration.management_rate_blocks:
@@ -468,7 +471,7 @@ def _render_management_rate_blocks_section(
                 st.markdown(f"**{block.name}**")
                 formatted_rate = f"{block.management_rate:.2f}".replace(".", ",")
                 account_label = "cuenta" if len(block.accounts) == 1 else "cuentas"
-                st.caption(f"{formatted_rate} €/h · {len(block.accounts)} {account_label}")
+                st.caption(f"Base {formatted_rate} €/h · {len(block.accounts)} {account_label}")
                 with st.container(horizontal=True):
                     if st.button("Editar", icon=":material/edit:", key=f"edit_rate_block_{block.name}"):
                         _management_rate_block_dialog(configuration, labels, block.name)
@@ -680,7 +683,7 @@ def _management_rate_block_dialog(
             placeholder="Selecciona o escribe cuentas",
         )
         management_rate = st.number_input(
-            "Tarifa de gestión (€/h)",
+            "Tarifa base de gestión (€/h)",
             min_value=0.0,
             value=existing.management_rate if existing else 0.0,
             step=0.01,
@@ -1159,10 +1162,10 @@ def _render_rate_optimization(
         return
 
     summary = optimization.billing_summary
-    metrics = st.columns(5)
+    metrics = st.columns(6)
     metrics[0].metric(
-        "Tarifa media",
-        f"{summary.weighted_average_rate:.2f} €/h" if summary.weighted_average_rate is not None else "Sin tarifa",
+        "Horas gestión",
+        _format_hours(summary.total_management_hours),
         border=True,
         height="stretch",
     )
@@ -1173,18 +1176,24 @@ def _render_rate_optimization(
         height="stretch",
     )
     metrics[2].metric(
+        "Tarifa media ponderada",
+        f"{summary.weighted_average_rate:.2f} €/h" if summary.weighted_average_rate is not None else "Sin tarifa",
+        border=True,
+        height="stretch",
+    )
+    metrics[3].metric(
         "Cuentas con bloque",
         summary.configured_block_accounts,
         border=True,
         height="stretch",
     )
-    metrics[3].metric(
+    metrics[4].metric(
         "Cuentas optimizadas",
-        summary.automatically_optimized_accounts,
+        summary.optimized_accounts,
         border=True,
         height="stretch",
     )
-    metrics[4].metric(
+    metrics[5].metric(
         "Incidencias",
         len(optimization.incidents),
         border=True,
@@ -1201,14 +1210,24 @@ def _render_rate_optimization(
         {
             "Gestor": item.manager_name,
             "Cuenta": item.account_code,
-            "Horas": item.management_hours,
-            "Tarifa": item.management_rate,
+            "Servicio": item.service_name,
+            "Horas gestión": item.management_hours,
+            "Horas facturables": item.billable_hours,
+            "Tarifa original": item.original_rate,
+            "Tarifa base/ref.": item.reference_rate,
+            "Multiplicador": f"x{item.rate_multiplier:g}" if item.rate_multiplier is not None else "—",
+            "Tarifa final": item.management_rate,
             "Importe": item.amount,
             "Origen tarifa": item.rate_source.value if item.rate_source is not None else "SIN TARIFA",
+            "Motivo": item.rate_reason,
             "Estado": item.rate_status,
         }
         for item in optimization.assignments
-    ], columns=["Gestor", "Cuenta", "Horas", "Tarifa", "Importe", "Origen tarifa", "Estado"])
+    ], columns=[
+        "Gestor", "Cuenta", "Servicio", "Horas gestión", "Horas facturables",
+        "Tarifa original", "Tarifa base/ref.", "Multiplicador", "Tarifa final", "Importe",
+        "Origen tarifa", "Motivo", "Estado",
+    ])
     manager_options = tuple(item.manager_name for item in optimization.manager_summaries)
     with st.container(horizontal=True, vertical_alignment="bottom"):
         selected_managers = st.multiselect(
@@ -1233,8 +1252,11 @@ def _render_rate_optimization(
         width="stretch",
         alt="Tarifas e importes de las asignaciones de gestión",
         column_config={
-            "Horas": st.column_config.NumberColumn(format="%.2f h"),
-            "Tarifa": st.column_config.NumberColumn(format="%.2f €/h"),
+            "Horas gestión": st.column_config.NumberColumn(format="%.2f h"),
+            "Horas facturables": st.column_config.NumberColumn(format="%.2f h"),
+            "Tarifa original": st.column_config.NumberColumn(format="%.2f €/h"),
+            "Tarifa base/ref.": st.column_config.NumberColumn(format="%.2f €/h"),
+            "Tarifa final": st.column_config.NumberColumn(format="%.2f €/h"),
             "Importe": st.column_config.NumberColumn(format="%.2f €"),
         },
     )

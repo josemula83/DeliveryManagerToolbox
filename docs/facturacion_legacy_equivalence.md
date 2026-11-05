@@ -37,11 +37,11 @@ Fuente de verdad: `legacy/facturacion_anterior.html`, marcador **Facturación BB
 | Fragmentación | Divide al alcanzar cada cuota | Antes intentaba mantener cuentas completas | Corregido a legacy | Bajo |
 | Tolerancia | No existe | Antes aplicaba zona preferente ±10 % | Eliminada del reparto | Bajo |
 | Segunda pasada | No existe para horas de gestión | Antes rebalanceaba | Convertida en operación nula | Bajo |
-| Tarifa de grupo | Base que puede multiplicarse por 1, 2 o 2,5 | Tarifa final aplicada directamente | No coincide | Alto; fuera del alcance actual |
-| Tarifa sin grupo | Tarifa original de la cuenta | Máxima tarifa detectada | No coincide cuando hay varias | Alto; fuera del alcance actual |
-| Horas facturadas | `managementHours / multiplier` | Iguales a horas de gestión | No coincide | Alto; fuera del alcance actual |
-| Optimización | Global, minimiza desviación y reparte penalizaciones x1/x2 | Selección directa y consolidación | No coincide | Alto; pendiente de fase específica |
-| Tarifa única | Consolida gestor-cuenta antes de optimizar | Consolida por gestor-cuenta-tarifa | Parcial | Puede conservar múltiples tarifas |
+| Tarifa de grupo | Base que puede multiplicarse por 1, 2 o 2,5 | Antes se aplicaba como tarifa final | Corregido a legacy | Bajo |
+| Tarifa sin grupo | Primera tarifa original de la cuenta que entra en cálculo | Antes elegía la máxima detectada | Corregido a legacy | Bajo |
+| Horas facturadas | `managementHours / multiplier` | Antes eran iguales a horas de gestión | Corregido a legacy | Bajo |
+| Optimización | Global, minimiza desviación y reparte penalizaciones x1/x2 | Antes hacía selección directa | Corregido a legacy | Bajo |
+| Tarifa única | Consolida gestor-cuenta antes de optimizar | Antes consolidaba por gestor-cuenta-tarifa | Corregido a legacy | Bajo |
 | Exportación | Reescribe las hojas del XLSX y genera `_GESTION.xlsx` | Pendiente | No coincide | Alto; fuera del alcance actual |
 
 ## Funciones JavaScript de referencia
@@ -60,4 +60,4 @@ Fuente de verdad: `legacy/facturacion_anterior.html`, marcador **Facturación BB
 - Una cuenta se divide en el límite de cuota; no se aplica tolerancia para conservarla completa.
 - El reparto conserva el cuadre exacto por cuenta y hoja y es determinista.
 
-La optimización de tarifas y la exportación se documentan como diferencias, pero no se modifican en esta fase.
+La exportación continúa pendiente. Capacidad, reparto y tarifas ya reproducen las reglas funcionales del HTML V1.3.

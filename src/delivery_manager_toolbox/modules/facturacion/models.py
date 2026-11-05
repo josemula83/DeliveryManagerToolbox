@@ -350,8 +350,8 @@ class AllocationStatus(StrEnum):
 
 class RateSource(StrEnum):
     CONFIGURED_BLOCK = "CONFIGURED_BLOCK"
-    ACCOUNT_RATE = "ACCOUNT_RATE"
-    OPTIMIZED_RATE = "OPTIMIZED_RATE"
+    AUTOMATIC = "AUTOMATIC"
+    LEGACY_OPTIMIZATION = "LEGACY_OPTIMIZATION"
 
 
 class RateIncidentCode(StrEnum):
@@ -383,6 +383,12 @@ class ManagementAssignment:
     rate_source: RateSource | None = None
     amount: float | None = None
     rate_status: str = "PENDING"
+    original_rate: float | None = None
+    reference_rate: float | None = None
+    reference_rate_source: RateSource | None = None
+    rate_multiplier: float | None = None
+    billable_hours: float | None = None
+    rate_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -428,6 +434,7 @@ class ManagerBillingSummary:
     employee_id: str
     manager_name: str
     management_hours: float
+    billable_hours: float
     management_amount: float
     average_rate: float | None
     accounts_assigned: int
@@ -438,6 +445,7 @@ class AccountBillingSummary:
     account_code: str
     service_name: str
     management_hours: float
+    billable_hours: float
     management_rate: float | None
     management_amount: float
     managers_assigned: int
@@ -447,10 +455,11 @@ class AccountBillingSummary:
 @dataclass(frozen=True, slots=True)
 class RateBillingSummary:
     total_management_hours: float
+    total_billable_hours: float
     total_management_amount: float
     weighted_average_rate: float | None
     configured_block_accounts: int
-    automatically_optimized_accounts: int
+    optimized_accounts: int
     multiple_rate_incidents: int
 
 
