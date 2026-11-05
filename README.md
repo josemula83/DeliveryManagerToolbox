@@ -92,6 +92,8 @@ La primera fase del motor recibe obligatoriamente un `SheetAnalysis` y crea un m
 
 La interfaz permite calcular solo la hoja seleccionada o todas las hojas compatibles. El modo multihoja crea un `WorkbookCalculationResult` y llama al mismo motor una vez por cada `SheetAnalysis`; conserva los resultados y auditorías separados por nombre de hoja. Las hojas sin personas o asignaciones reconocibles se omiten con un aviso y no impiden calcular los demás meses.
 
+Después de calcular las horas de gestión por cuenta, el motor las reparte entre las Personas en Gestión según el peso relativo de su capacidad libre. El reparto usa escalones de 0,5 h, ordena gestores y cuentas de forma determinista, conserva las cuentas completas cuando sus límites lo permiten y divide una cuenta solo al cruzar la cuota de un gestor. Un barrido final acepta únicamente movimientos que reduzcan la desviación. Cada resultado mensual incluye objetivos, asignaciones, desviaciones, estado respecto a la tolerancia de ±10 %, cuentas divididas y una validación de cuadre exacto.
+
 Responsabilidades internas:
 
 - `view.py`: interfaz y estado de sesión;
@@ -102,7 +104,7 @@ Responsabilidades internas:
 - `business.py`: limpieza auditable, agregación de horas base y cálculo de gestión por cuenta;
 - `exporter.py`: punto de extensión para el futuro Excel de salida.
 
-El reparto entre Personas en Gestión, la optimización de tarifas y `exporter.py` siguen deliberadamente pendientes. La interfaz consume contratos estables para que esas reglas futuras puedan añadirse sin rediseñarla.
+La optimización de tarifas y `exporter.py` siguen deliberadamente pendientes. La interfaz consume contratos estables para que esas reglas futuras puedan añadirse sin rediseñarla.
 
 ## Comprobaciones
 

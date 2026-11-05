@@ -268,6 +268,54 @@ class BillingCalculationSummary:
     hours_preserved_by_exception: float
 
 
+class AllocationStatus(StrEnum):
+    OK = "OK"
+    OUTSIDE_TOLERANCE = "OUTSIDE_TOLERANCE"
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerTarget:
+    employee_id: str
+    manager_name: str
+    capacity_percentage: float
+    target_hours: float
+
+
+@dataclass(frozen=True, slots=True)
+class ManagementAssignment:
+    sheet_name: str
+    employee_id: str
+    manager_name: str
+    account_code: str
+    service_name: str
+    management_hours: float
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerAllocationSummary:
+    employee_id: str
+    manager_name: str
+    capacity_percentage: float
+    target_hours: float
+    assigned_hours: float
+    difference_hours: float
+    difference_percentage: float
+    accounts_assigned: int
+    status: AllocationStatus
+
+
+@dataclass(frozen=True, slots=True)
+class ManagementAllocationResult:
+    sheet_name: str
+    assignments: tuple[ManagementAssignment, ...]
+    manager_summaries: tuple[ManagerAllocationSummary, ...]
+    total_management_hours: float
+    total_assigned_hours: float
+    allocation_difference: float
+    allocation_status: AllocationStatus
+    split_account_count: int
+
+
 @dataclass(frozen=True, slots=True)
 class SheetCalculationResult:
     """Resultado de la primera fase asociado inequívocamente a un período."""
@@ -276,6 +324,7 @@ class SheetCalculationResult:
     summary: BillingCalculationSummary
     account_calculations: tuple[AccountManagementCalculation, ...]
     clean_model: CleanBillingModel
+    allocation_result: ManagementAllocationResult | None = None
     incidents: tuple[str, ...] = ()
 
     @property

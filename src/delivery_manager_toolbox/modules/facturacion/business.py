@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 import math
 
+from delivery_manager_toolbox.modules.facturacion.allocation import calculate_management_allocation
 from delivery_manager_toolbox.modules.facturacion.configuration import BillingConfiguration
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountAssignment,
@@ -214,11 +215,19 @@ def calculate_sheet_management(
     base_hours = calculate_account_base_hours(clean_model, analysis.accounts)
     calculations = calculate_all_accounts(base_hours, configuration)
     summary = build_calculation_summary(calculations, clean_model.audit)
+    allocation_result = calculate_management_allocation(analysis, calculations, configuration)
+    incidents = (
+        ("No se pudo repartir la gestión: configura al menos una Persona en Gestión con capacidad positiva.",)
+        if summary.total_management_hours > 0 and allocation_result is None
+        else ()
+    )
     return SheetCalculationResult(
         sheet_name=analysis.sheet_name,
         summary=summary,
         account_calculations=calculations,
         clean_model=clean_model,
+        allocation_result=allocation_result,
+        incidents=incidents,
     )
 
 

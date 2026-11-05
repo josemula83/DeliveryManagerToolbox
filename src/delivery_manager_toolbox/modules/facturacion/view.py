@@ -47,7 +47,9 @@ from delivery_manager_toolbox.modules.facturacion.excel_reader import (
 )
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountCatalogItem,
+    AllocationStatus,
     CalculationType,
+    ManagementAllocationResult,
     SheetAnalysis,
     SheetCalculationResult,
     SkippedSheet,
@@ -93,7 +95,7 @@ def _parse_workbook_sheets(
 def render_page() -> None:
     configuration = _configuration()
     st.title("Facturación")
-    st.caption("Revisa el Excel jerárquico y prepara la configuración. El reparto de gestión sigue pendiente.")
+    st.caption("Revisa el Excel jerárquico, calcula la gestión y repártela entre las Personas en Gestión.")
     _show_notice()
 
     uploaded_file = _render_upload()
@@ -169,7 +171,7 @@ def render_page() -> None:
     workbook_result = st.session_state.get(_WORKBOOK_RESULT_KEY)
     has_result = result is not None or workbook_result is not None
     st.caption(
-        "Primera fase calculada; el reparto entre gestores sigue pendiente."
+        "Cálculo y reparto completados; la optimización de tarifas sigue pendiente."
         if has_result else
         "Excel preparado para calcular." if workbook_info else
         "Carga un Excel para iniciar el análisis."
@@ -918,6 +920,8 @@ def _render_sheet_calculation_output(
         },
     )
 
+    _render_management_allocation(result.allocation_result, result.incidents, key_suffix)
+
     with st.expander("Ver limpieza del modelo"):
         st.markdown("##### Asignaciones eliminadas")
         st.dataframe(
@@ -936,7 +940,112 @@ def _render_sheet_calculation_output(
             column_config={"Horas": st.column_config.NumberColumn(format="%.2f h")},
         )
 
-    st.caption("La asignación entre gestores, la optimización de tarifas y el Excel final siguen pendientes.")
+    st.caption("La optimización de tarifas y el Excel final siguen pendientes.")
+
+
+def _render_management_allocation(
+    allocation: ManagementAllocationResult | None,
+    incidents: tuple[str, ...],
+    key_suffix: str,
+) -> None:
+    st.markdown("#### Reparto entre Personas en Gestión")
+    if allocation is None:
+        message = incidents[0] if incidents else "No hay horas de gestión que repartir."
+        st.info(message)
+        return
+
+    metrics = st.columns(4)
+    metrics[0].metric("Gestores", len(allocation.manager_summaries), border=True, height="stretch")
+    metrics[1].metric(
+        "Horas gestión",
+        _format_hours(allocation.total_management_hours),
+        border=True,
+        height="stretch",
+    )
+    metrics[2].metric(
+        "Horas repartidas",
+        _format_hours(allocation.total_assigned_hours),
+        border=True,
+        height="stretch",
+    )
+    metrics[3].metric(
+        "Diferencia",
+        _format_hours(allocation.allocation_difference),
+        border=True,
+        height="stretch",
+    )
+    if allocation.allocation_status == AllocationStatus.OUTSIDE_TOLERANCE:
+        outside = ", ".join(
+            item.manager_name
+            for item in allocation.manager_summaries
+            if item.status == AllocationStatus.OUTSIDE_TOLERANCE
+        )
+        st.warning(f"Reparto cuadrado, con gestores fuera de la tolerancia ±10 %: {outside}.")
+
+    summary_rows = pd.DataFrame([
+        {
+            "Gestor": item.manager_name,
+            "Capacidad %": item.capacity_percentage,
+            "Objetivo": item.target_hours,
+            "Asignado": item.assigned_hours,
+            "Diferencia": item.difference_hours,
+            "Desviación %": item.difference_percentage,
+            "Nº cuentas": item.accounts_assigned,
+            "Estado": "OK" if item.status == AllocationStatus.OK else "FUERA DE TOLERANCIA",
+        }
+        for item in allocation.manager_summaries
+    ])
+    st.dataframe(
+        summary_rows,
+        hide_index=True,
+        width="stretch",
+        alt="Resumen del reparto de gestión por persona",
+        column_config={
+            "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
+            "Objetivo": st.column_config.NumberColumn(format="%.2f h"),
+            "Asignado": st.column_config.NumberColumn(format="%.2f h"),
+            "Diferencia": st.column_config.NumberColumn(format="%.2f h"),
+            "Desviación %": st.column_config.NumberColumn(format="%.2f %%"),
+        },
+    )
+
+    st.markdown("##### Detalle del reparto")
+    manager_options = tuple(item.manager_name for item in allocation.manager_summaries)
+    with st.container(horizontal=True, vertical_alignment="bottom"):
+        selected_managers = st.multiselect(
+            "Filtrar por gestor",
+            manager_options,
+            placeholder="Todos",
+            key=f"allocation_managers{key_suffix}",
+        )
+        account_search = st.text_input(
+            "Filtrar por cuenta",
+            type="search",
+            placeholder="Código de cuenta",
+            key=f"allocation_account{key_suffix}",
+        )
+    detail_rows = pd.DataFrame([
+        {
+            "Gestor": item.manager_name,
+            "Cuenta": item.account_code,
+            "Servicio": item.service_name,
+            "Horas gestión": item.management_hours,
+        }
+        for item in allocation.assignments
+    ], columns=["Gestor", "Cuenta", "Servicio", "Horas gestión"])
+    if selected_managers:
+        detail_rows = detail_rows[detail_rows["Gestor"].isin(selected_managers)]
+    if account_search:
+        detail_rows = detail_rows[
+            detail_rows["Cuenta"].str.casefold().str.contains(account_search.casefold(), regex=False)
+        ]
+    st.dataframe(
+        detail_rows,
+        hide_index=True,
+        width="stretch",
+        alt="Asignaciones de horas de gestión por persona y cuenta",
+        column_config={"Horas gestión": st.column_config.NumberColumn(format="%.2f h")},
+    )
 
 
 def _audit_dataframe(records: Iterable) -> pd.DataFrame:
