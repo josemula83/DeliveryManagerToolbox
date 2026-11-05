@@ -19,6 +19,8 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     CleanModelAuditSummary,
     SheetAnalysis,
     SheetCalculationResult,
+    SkippedSheet,
+    WorkbookCalculationResult,
 )
 from delivery_manager_toolbox.modules.facturacion.validation import normalize_identifier
 
@@ -220,6 +222,26 @@ def calculate_sheet_management(
     )
 
 
+def calculate_workbook_management(
+    analyses: Iterable[SheetAnalysis],
+    configuration: BillingConfiguration,
+    skipped_sheets: Iterable[SkippedSheet] = (),
+) -> WorkbookCalculationResult:
+    """Coordina cálculos independientes sin combinar datos entre hojas."""
+    results_by_sheet: dict[str, SheetCalculationResult] = {}
+    skipped = list(skipped_sheets)
+    for analysis in analyses:
+        incompatibility = _sheet_incompatibility_reason(analysis)
+        if incompatibility is not None:
+            skipped.append(SkippedSheet(analysis.sheet_name, incompatibility))
+            continue
+        results_by_sheet[analysis.sheet_name] = calculate_sheet_management(
+            analysis,
+            configuration,
+        )
+    return WorkbookCalculationResult(results_by_sheet, tuple(skipped))
+
+
 def calculate_billing(
     analysis: SheetAnalysis,
     configuration: BillingConfiguration,
@@ -236,6 +258,14 @@ def _valid_assignment_hours(assignment: AccountAssignment) -> float:
         and not isinstance(item.hours, bool)
         and math.isfinite(item.hours)
     )
+
+
+def _sheet_incompatibility_reason(analysis: SheetAnalysis) -> str | None:
+    if not analysis.people:
+        return "No se detectaron filas de persona."
+    if not any(assignment.account_code for assignment in analysis.assignments):
+        return "No se detectaron asignaciones con código de cuenta."
+    return None
 
 
 def _round_percentage_management_hours(base_hours: float, raw_hours: float) -> float:
@@ -272,5 +302,6 @@ __all__ = [
     "calculate_all_accounts",
     "calculate_billing",
     "calculate_sheet_management",
+    "calculate_workbook_management",
     "calculate_management_hours",
 ]

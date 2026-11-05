@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, MutableMapping
 from hashlib import sha256
+import json
 
 import pandas as pd
 import streamlit as st
 from streamlit.typing import UploadedFile
 
 from delivery_manager_toolbox.core.logging import get_logger
-from delivery_manager_toolbox.modules.facturacion.business import calculate_sheet_management
+from delivery_manager_toolbox.modules.facturacion.business import (
+    calculate_sheet_management,
+    calculate_workbook_management,
+)
 from delivery_manager_toolbox.modules.facturacion.configuration import (
     BillingConfiguration,
     add_management_person_account_exception,
@@ -26,7 +30,7 @@ from delivery_manager_toolbox.modules.facturacion.configuration import (
     configuration_from_json,
     configuration_to_json,
     load_configuration,
-    reconcile_management_person_account_exceptions,
+    reconcile_management_person_account_exceptions_for_sheets,
     remove_management_person_account_exception,
     remove_management_rate_block,
     replace_management_rate_block,
@@ -46,7 +50,9 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     CalculationType,
     SheetAnalysis,
     SheetCalculationResult,
+    SkippedSheet,
     WorkbookAnalysis,
+    WorkbookCalculationResult,
 )
 from delivery_manager_toolbox.modules.facturacion.validation import ConfigurationValidationError
 
@@ -56,6 +62,8 @@ _CONFIG_KEY = "facturacion_configuration"
 _NOTICE_KEY = "facturacion_notice"
 _RESULT_KEY = "facturacion_phase_one_result"
 _RESULT_CONTEXT_KEY = "facturacion_phase_one_context"
+_WORKBOOK_RESULT_KEY = "facturacion_all_sheets_result"
+_WORKBOOK_RESULT_CONTEXT_KEY = "facturacion_all_sheets_context"
 
 
 @st.cache_data(show_spinner=False, max_entries=10)
@@ -68,6 +76,20 @@ def _parse_uploaded_sheet(contents: bytes, sheet: str) -> SheetAnalysis:
     return parse_hierarchical_worksheet(contents, sheet)
 
 
+def _parse_workbook_sheets(
+    contents: bytes,
+    sheet_names: Iterable[str],
+) -> tuple[tuple[SheetAnalysis, ...], tuple[SkippedSheet, ...]]:
+    analyses: list[SheetAnalysis] = []
+    skipped: list[SkippedSheet] = []
+    for sheet_name in sheet_names:
+        try:
+            analyses.append(_parse_uploaded_sheet(contents, sheet_name))
+        except WorkbookInspectionError as exc:
+            skipped.append(SkippedSheet(sheet_name, str(exc)))
+    return tuple(analyses), tuple(skipped)
+
+
 def render_page() -> None:
     configuration = _configuration()
     st.title("Facturación")
@@ -76,47 +98,86 @@ def render_page() -> None:
 
     uploaded_file = _render_upload()
     workbook_info, analysis = _render_workbook(uploaded_file, configuration)
-    if analysis is not None:
-        reconciled, removed = reconcile_management_person_account_exceptions(
+    if (
+        uploaded_file is not None
+        and workbook_info is not None
+        and _configuration().management_person_account_exceptions
+    ):
+        sheet_analyses, _ = _parse_workbook_sheets(
+            uploaded_file.getvalue(),
+            workbook_info.sheet_names,
+        )
+        reconciled, removed = reconcile_management_person_account_exceptions_for_sheets(
             _configuration(),
-            analysis,
+            sheet_analyses,
         )
         if removed:
             st.session_state[_CONFIG_KEY] = reconciled
             st.warning(
                 f"Se eliminaron {removed} excepciones persona-cuenta que ya no existen "
-                "en la hoja activa o ya no corresponden a Personas en Gestión."
+                "en ninguna hoja del libro o ya no corresponden a Personas en Gestión."
             )
     _render_configuration(_configuration(), analysis)
     _render_persistence(_configuration())
 
     calculation_context = _calculation_context(uploaded_file, analysis, _configuration())
-    if st.session_state.get(_RESULT_CONTEXT_KEY) != calculation_context:
-        st.session_state.pop(_RESULT_KEY, None)
-        st.session_state.pop(_RESULT_CONTEXT_KEY, None)
-    if st.button(
-        "CALCULAR FACTURACIÓN",
-        type="primary",
-        icon=":material/calculate:",
-        disabled=analysis is None,
-        width="stretch",
-        help="Ejecuta la limpieza y calcula las horas de gestión por cuenta. No reparte horas entre gestores.",
-        key="calculate_billing",
-    ) and analysis is not None:
+    workbook_calculation_context = _workbook_calculation_context(uploaded_file, _configuration())
+    _discard_stale_calculation_result(st.session_state, calculation_context, analysis)
+    _discard_stale_workbook_calculation_result(
+        st.session_state,
+        workbook_calculation_context,
+    )
+    individual_column, workbook_column = st.columns(2)
+    with individual_column:
+        calculate_individual = st.button(
+            "CALCULAR FACTURACIÓN",
+            type="primary",
+            icon=":material/calculate:",
+            disabled=analysis is None,
+            width="stretch",
+            help="Calcula exclusivamente la hoja seleccionada.",
+            key="calculate_billing",
+        )
+    with workbook_column:
+        calculate_workbook = st.button(
+            "CALCULAR TODOS LOS MESES",
+            icon=":material/calendar_month:",
+            disabled=uploaded_file is None or workbook_info is None,
+            width="stretch",
+            help="Calcula cada hoja compatible de forma independiente.",
+            key="calculate_all_billing",
+        )
+    if calculate_individual and analysis is not None:
         st.session_state[_RESULT_KEY] = calculate_sheet_management(analysis, _configuration())
         st.session_state[_RESULT_CONTEXT_KEY] = calculation_context
-    result = st.session_state.get(_RESULT_KEY)
-    if result is not None and (analysis is None or result.sheet_name != analysis.sheet_name):
+        st.session_state.pop(_WORKBOOK_RESULT_KEY, None)
+        st.session_state.pop(_WORKBOOK_RESULT_CONTEXT_KEY, None)
+    if calculate_workbook and uploaded_file is not None and workbook_info is not None:
+        analyses, parse_skipped = _parse_workbook_sheets(
+            uploaded_file.getvalue(),
+            workbook_info.sheet_names,
+        )
+        st.session_state[_WORKBOOK_RESULT_KEY] = calculate_workbook_management(
+            analyses,
+            _configuration(),
+            parse_skipped,
+        )
+        st.session_state[_WORKBOOK_RESULT_CONTEXT_KEY] = workbook_calculation_context
         st.session_state.pop(_RESULT_KEY, None)
         st.session_state.pop(_RESULT_CONTEXT_KEY, None)
-        result = None
+    result = st.session_state.get(_RESULT_KEY)
+    workbook_result = st.session_state.get(_WORKBOOK_RESULT_KEY)
+    has_result = result is not None or workbook_result is not None
     st.caption(
         "Primera fase calculada; el reparto entre gestores sigue pendiente."
-        if result else
+        if has_result else
         "Excel preparado para calcular." if workbook_info else
         "Carga un Excel para iniciar el análisis."
     )
-    _render_calculation_outputs(result)
+    if isinstance(workbook_result, WorkbookCalculationResult):
+        _render_workbook_calculation_outputs(workbook_result)
+    else:
+        _render_calculation_outputs(result if isinstance(result, SheetCalculationResult) else None)
 
 
 def _configuration() -> BillingConfiguration:
@@ -134,6 +195,8 @@ def _set_configuration(configuration: BillingConfiguration, message: str) -> Non
     st.session_state[_CONFIG_KEY] = configuration
     st.session_state.pop(_RESULT_KEY, None)
     st.session_state.pop(_RESULT_CONTEXT_KEY, None)
+    st.session_state.pop(_WORKBOOK_RESULT_KEY, None)
+    st.session_state.pop(_WORKBOOK_RESULT_CONTEXT_KEY, None)
     st.session_state[_NOTICE_KEY] = ("success", message)
     st.rerun()
 
@@ -665,13 +728,105 @@ def _calculation_context_key(
     return f"{workbook_digest}:{sheet_name}:{configuration_digest}"
 
 
+def _workbook_calculation_context(
+    uploaded_file: UploadedFile | None,
+    configuration: BillingConfiguration,
+) -> str | None:
+    if uploaded_file is None:
+        return None
+    return _workbook_calculation_context_key(uploaded_file.getvalue(), configuration)
+
+
+def _workbook_calculation_context_key(
+    workbook_contents: bytes,
+    configuration: BillingConfiguration,
+) -> str:
+    workbook_digest = sha256(workbook_contents).hexdigest()
+    configuration_payload = json.loads(configuration_to_json(configuration))
+    configuration_payload.pop("source_sheet", None)
+    configuration_payload.pop("column_mapping", None)
+    serialized_configuration = json.dumps(
+        configuration_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    configuration_digest = sha256(serialized_configuration.encode()).hexdigest()
+    return f"{workbook_digest}:{configuration_digest}"
+
+
+def _discard_stale_calculation_result(
+    state: MutableMapping[str, object],
+    calculation_context: str | None,
+    analysis: SheetAnalysis | None,
+) -> None:
+    """Elimina resultados que no pertenecen al fichero, hoja o configuración actuales."""
+    result = state.get(_RESULT_KEY)
+    context_changed = state.get(_RESULT_CONTEXT_KEY) != calculation_context
+    sheet_changed = (
+        result is not None
+        and (
+            not isinstance(result, SheetCalculationResult)
+            or analysis is None
+            or result.sheet_name != analysis.sheet_name
+        )
+    )
+    if context_changed or sheet_changed:
+        state.pop(_RESULT_KEY, None)
+        state.pop(_RESULT_CONTEXT_KEY, None)
+
+
+def _discard_stale_workbook_calculation_result(
+    state: MutableMapping[str, object],
+    calculation_context: str | None,
+) -> None:
+    """Elimina el resultado multihoja si cambia el libro o una regla de cálculo."""
+    result = state.get(_WORKBOOK_RESULT_KEY)
+    context_changed = state.get(_WORKBOOK_RESULT_CONTEXT_KEY) != calculation_context
+    invalid_result = result is not None and not isinstance(result, WorkbookCalculationResult)
+    if context_changed or invalid_result:
+        state.pop(_WORKBOOK_RESULT_KEY, None)
+        state.pop(_WORKBOOK_RESULT_CONTEXT_KEY, None)
+
+
 def _render_calculation_outputs(result: SheetCalculationResult | None) -> None:
     if result is None:
         st.info("Ejecuta el cálculo para obtener el modelo limpio y las horas de gestión por cuenta.")
         return
 
-    summary = result.summary
     st.subheader("Resultado de facturación")
+    _render_sheet_calculation_output(result)
+
+
+def _render_workbook_calculation_outputs(result: WorkbookCalculationResult) -> None:
+    st.subheader("Resultado de facturación")
+    metrics = st.columns(3)
+    metrics[0].metric("Hojas detectadas", result.detected_sheet_count, border=True, height="stretch")
+    metrics[1].metric("Meses calculados", result.calculated_sheet_count, border=True, height="stretch")
+    metrics[2].metric("Hojas omitidas", len(result.skipped_sheets), border=True, height="stretch")
+    if result.skipped_sheets:
+        details = "\n".join(
+            f"- **{item.sheet_name}:** {item.reason}"
+            for item in result.skipped_sheets
+        )
+        st.warning(f"Se omitieron hojas no compatibles:\n{details}")
+    if not result.results_by_sheet:
+        st.info("No se encontró ninguna hoja compatible para calcular.")
+        return
+
+    sheet_results = tuple(result.results_by_sheet.values())
+    tabs = st.tabs([item.sheet_name for item in sheet_results])
+    for index, (tab, sheet_result) in enumerate(zip(tabs, sheet_results, strict=True)):
+        with tab:
+            _render_sheet_calculation_output(sheet_result, key_suffix=f"_all_{index}")
+
+
+def _render_sheet_calculation_output(
+    result: SheetCalculationResult,
+    *,
+    key_suffix: str = "",
+) -> None:
+    summary = result.summary
     st.markdown(f"**Periodo:** {result.sheet_name}")
     st.markdown("#### Resumen del modelo")
     cleaning_metrics = st.columns(4)
@@ -734,13 +889,13 @@ def _render_calculation_outputs(result: SheetCalculationResult | None) -> None:
             "Filtrar cuentas o servicios",
             type="search",
             placeholder="Código o servicio",
-            key="billing_result_search",
+            key=f"billing_result_search{key_suffix}",
         )
         selected_types = st.multiselect(
             "Tipo de cálculo",
             [item.value for item in CalculationType],
             placeholder="Todos",
-            key="billing_result_types",
+            key=f"billing_result_types{key_suffix}",
         )
     filtered = rows
     if search:

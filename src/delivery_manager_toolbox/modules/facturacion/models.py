@@ -288,4 +288,26 @@ class SheetCalculationResult:
         return self.clean_model.audit
 
 
+@dataclass(frozen=True, slots=True)
+class SkippedSheet:
+    sheet_name: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkbookCalculationResult:
+    """Resultados independientes de las hojas procesables de un libro."""
+
+    results_by_sheet: dict[str, SheetCalculationResult]
+    skipped_sheets: tuple[SkippedSheet, ...] = ()
+
+    @property
+    def detected_sheet_count(self) -> int:
+        return len(self.results_by_sheet) + len(self.skipped_sheets)
+
+    @property
+    def calculated_sheet_count(self) -> int:
+        return len(self.results_by_sheet)
+
+
 BillingResult = SheetCalculationResult

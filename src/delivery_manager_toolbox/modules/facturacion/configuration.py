@@ -183,20 +183,27 @@ def reconcile_management_person_account_exceptions(
     configuration: BillingConfiguration,
     analysis: SheetAnalysis,
 ) -> tuple[BillingConfiguration, int]:
+    """Conserva las excepciones que siguen siendo válidas en una hoja."""
+    return reconcile_management_person_account_exceptions_for_sheets(
+        configuration,
+        (analysis,),
+    )
+
+
+def reconcile_management_person_account_exceptions_for_sheets(
+    configuration: BillingConfiguration,
+    analyses: Iterable[SheetAnalysis],
+) -> tuple[BillingConfiguration, int]:
+    """Conserva excepciones válidas en al menos una hoja del libro activo."""
+    sheet_analyses = tuple(analyses)
     management_names = {normalize_identifier(person.name) for person in configuration.management_people}
     valid: list[ManagementPersonAccountException] = []
     for exception in configuration.management_person_account_exceptions:
         if normalize_identifier(exception.person_name) not in management_names:
             continue
-        assignments = _assignments_for_person(
-            analysis.assignments,
-            exception.employee_id,
-            exception.person_name,
-        )
         if any(
-            assignment.account_code is not None
-            and normalize_identifier(assignment.account_code) == normalize_identifier(exception.account_code)
-            for assignment in assignments
+            _analysis_contains_exception(analysis, exception)
+            for analysis in sheet_analyses
         ):
             valid.append(exception)
     removed = len(configuration.management_person_account_exceptions) - len(valid)
@@ -207,6 +214,22 @@ def reconcile_management_person_account_exceptions(
         management_person_account_exceptions=tuple(valid),
     ))
     return reconciled, removed
+
+
+def _analysis_contains_exception(
+    analysis: SheetAnalysis,
+    exception: ManagementPersonAccountException,
+) -> bool:
+    assignments = _assignments_for_person(
+        analysis.assignments,
+        exception.employee_id,
+        exception.person_name,
+    )
+    return any(
+        assignment.account_code is not None
+        and normalize_identifier(assignment.account_code) == normalize_identifier(exception.account_code)
+        for assignment in assignments
+    )
 
 
 def add_no_management_account(configuration: BillingConfiguration, account: object) -> BillingConfiguration:

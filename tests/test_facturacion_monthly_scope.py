@@ -8,12 +8,18 @@ from delivery_manager_toolbox.modules.facturacion.configuration import (
     BillingConfiguration,
     add_management_person,
     add_management_person_account_exception,
+    reconcile_management_person_account_exceptions_for_sheets,
 )
 from delivery_manager_toolbox.modules.facturacion.excel_reader import (
     inspect_workbook,
     parse_hierarchical_worksheet,
 )
-from delivery_manager_toolbox.modules.facturacion.view import _calculation_context_key
+from delivery_manager_toolbox.modules.facturacion.view import (
+    _RESULT_CONTEXT_KEY,
+    _RESULT_KEY,
+    _calculation_context_key,
+    _discard_stale_calculation_result,
+)
 
 
 def build_two_month_workbook() -> bytes:
@@ -58,6 +64,8 @@ class MonthlyCalculationScopeTests(unittest.TestCase):
         self.assertNotEqual(december_account.base_hours, 220)
         self.assertEqual(november_result.sheet_name, "Horas servicio noviembre")
         self.assertEqual(december_result.sheet_name, "Horas servicio diciembre")
+        self.assertEqual(november_account.management_hours, 5)
+        self.assertEqual(december_account.management_hours, 6)
 
     def test_same_person_hours_are_not_mixed_between_months(self) -> None:
         november_result = calculate_sheet_management(self.november, BillingConfiguration())
@@ -96,6 +104,27 @@ class MonthlyCalculationScopeTests(unittest.TestCase):
         self.assertEqual(december_result.audit.exceptions_preserved, 0)
         self.assertEqual(december_result.audit.hours_removed, 30)
 
+    def test_exception_valid_in_one_month_survives_workbook_reconciliation(self) -> None:
+        configuration = add_management_person(BillingConfiguration(), "Gestor Excepción", 50)
+        configuration = add_management_person_account_exception(
+            configuration,
+            "3001",
+            "Gestor Excepción",
+            "EXT-E",
+            self.november.assignments,
+        )
+
+        reconciled, removed = reconcile_management_person_account_exceptions_for_sheets(
+            configuration,
+            (self.november, self.december),
+        )
+
+        self.assertEqual(removed, 0)
+        self.assertEqual(
+            reconciled.management_person_account_exceptions,
+            configuration.management_person_account_exceptions,
+        )
+
     def test_sheet_change_produces_a_different_ui_result_context(self) -> None:
         configuration = BillingConfiguration()
         november_context = _calculation_context_key(
@@ -109,6 +138,14 @@ class MonthlyCalculationScopeTests(unittest.TestCase):
             configuration,
         )
         self.assertNotEqual(november_context, december_context)
+
+        state = {
+            _RESULT_KEY: calculate_sheet_management(self.november, configuration),
+            _RESULT_CONTEXT_KEY: november_context,
+        }
+        _discard_stale_calculation_result(state, december_context, self.december)
+        self.assertNotIn(_RESULT_KEY, state)
+        self.assertNotIn(_RESULT_CONTEXT_KEY, state)
 
     def test_workbook_analysis_cannot_be_used_as_monthly_calculation_input(self) -> None:
         workbook_analysis = inspect_workbook(self.contents, "meses.xlsx")
