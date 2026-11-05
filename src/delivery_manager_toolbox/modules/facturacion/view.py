@@ -956,44 +956,47 @@ def _render_management_allocation(
         st.info(message)
         return
 
-    metrics = st.columns(4)
+    metrics = st.columns(5)
     metrics[0].metric("Gestores", len(allocation.manager_summaries), border=True, height="stretch")
     metrics[1].metric(
-        "Horas gestión",
+        "Horas gestión necesarias",
         _format_hours(allocation.total_management_hours),
         border=True,
         height="stretch",
     )
     metrics[2].metric(
+        "Capacidad total gestores",
+        _format_hours(allocation.total_management_capacity),
+        border=True,
+        height="stretch",
+    )
+    metrics[3].metric(
         "Horas repartidas",
         _format_hours(allocation.total_assigned_hours),
         border=True,
         height="stretch",
     )
-    metrics[3].metric(
-        "Diferencia",
-        _format_hours(allocation.allocation_difference),
-        border=True,
-        height="stretch",
-    )
-    if allocation.allocation_status == AllocationStatus.OUTSIDE_TOLERANCE:
-        outside = ", ".join(
-            item.manager_name
-            for item in allocation.manager_summaries
-            if item.status == AllocationStatus.OUTSIDE_TOLERANCE
+    balance_label = "Déficit de capacidad" if allocation.capacity_deficit_hours else "Capacidad sobrante"
+    balance_value = allocation.capacity_deficit_hours or allocation.capacity_surplus_hours
+    metrics[4].metric(balance_label, _format_hours(balance_value), border=True, height="stretch")
+    if allocation.allocation_status == AllocationStatus.INSUFFICIENT_CAPACITY:
+        st.warning(
+            "Capacidad insuficiente: el reparto cuadra las horas requeridas, pero supera "
+            f"la capacidad mensual total en {_format_hours(allocation.capacity_deficit_hours)}."
         )
-        st.warning(f"Reparto cuadrado, con gestores fuera de la tolerancia ±10 %: {outside}.")
+    if allocation.incidents:
+        st.warning("\n".join(f"- {incident}" for incident in allocation.incidents))
 
     summary_rows = pd.DataFrame([
         {
             "Gestor": item.manager_name,
             "Capacidad %": item.capacity_percentage,
-            "Objetivo": item.target_hours,
-            "Asignado": item.assigned_hours,
-            "Diferencia": item.difference_hours,
-            "Desviación %": item.difference_percentage,
+            "Horas laborables mes": item.monthly_workable_hours,
+            "Capacidad gestión": item.management_capacity_hours,
+            "Horas gestión asignadas": item.assigned_hours,
+            "Capacidad restante": item.capacity_remaining_hours,
             "Nº cuentas": item.accounts_assigned,
-            "Estado": "OK" if item.status == AllocationStatus.OK else "FUERA DE TOLERANCIA",
+            "Estado": item.status.value,
         }
         for item in allocation.manager_summaries
     ])
@@ -1004,12 +1007,36 @@ def _render_management_allocation(
         alt="Resumen del reparto de gestión por persona",
         column_config={
             "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
-            "Objetivo": st.column_config.NumberColumn(format="%.2f h"),
-            "Asignado": st.column_config.NumberColumn(format="%.2f h"),
-            "Diferencia": st.column_config.NumberColumn(format="%.2f h"),
-            "Desviación %": st.column_config.NumberColumn(format="%.2f %%"),
+            "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
+            "Capacidad gestión": st.column_config.NumberColumn(format="%.2f h"),
+            "Horas gestión asignadas": st.column_config.NumberColumn(format="%.2f h"),
+            "Capacidad restante": st.column_config.NumberColumn(format="%.2f h"),
         },
     )
+
+    with st.expander("Ver cálculo de capacidad"):
+        capacity_rows = pd.DataFrame([
+            {
+                "Gestor": item.manager_name,
+                "Hoja": allocation.sheet_name,
+                "Horas laborables": item.monthly_workable_hours,
+                "Capacidad %": item.capacity_percentage,
+                "Capacidad gestión": item.management_capacity_hours,
+                "Origen del dato": item.capacity_source.value if item.capacity_source is not None else "NO ENCONTRADO",
+            }
+            for item in allocation.manager_summaries
+        ])
+        st.dataframe(
+            capacity_rows,
+            hide_index=True,
+            width="stretch",
+            alt="Origen y cálculo de capacidad mensual por gestor",
+            column_config={
+                "Horas laborables": st.column_config.NumberColumn(format="%.2f h"),
+                "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
+                "Capacidad gestión": st.column_config.NumberColumn(format="%.2f h"),
+            },
+        )
 
     st.markdown("##### Detalle del reparto")
     manager_options = tuple(item.manager_name for item in allocation.manager_summaries)

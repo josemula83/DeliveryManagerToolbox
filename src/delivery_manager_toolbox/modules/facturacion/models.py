@@ -61,6 +61,19 @@ class Person:
     name: str
 
 
+class CapacitySource(StrEnum):
+    PERSON_TOTAL_HOURS = "PERSON_TOTAL_HOURS"
+    DAILY_HOURS = "DAILY_HOURS"
+
+
+@dataclass(frozen=True, slots=True)
+class PersonMonthlyWorkCapacity:
+    employee_id: str
+    person_name: str
+    monthly_workable_hours: float
+    capacity_source: CapacitySource
+
+
 @dataclass(frozen=True, slots=True)
 class DailyHours:
     day: object
@@ -130,6 +143,7 @@ class SheetAnalysis:
     raw_columns: tuple[str, ...]
     raw_rows: tuple[tuple[object, ...], ...]
     scanned_rows: int
+    person_monthly_capacities: tuple[PersonMonthlyWorkCapacity, ...] = ()
 
     @property
     def person_summaries(self) -> tuple[PersonSummary, ...]:
@@ -271,6 +285,10 @@ class BillingCalculationSummary:
 class AllocationStatus(StrEnum):
     OK = "OK"
     OUTSIDE_TOLERANCE = "OUTSIDE_TOLERANCE"
+    CAPACITY_OK = "CAPACITY_OK"
+    INSUFFICIENT_CAPACITY = "INSUFFICIENT_CAPACITY"
+    CAPACITY_EXCEEDED = "CAPACITY_EXCEEDED"
+    CAPACITY_NOT_FOUND = "CAPACITY_NOT_FOUND"
 
 
 class RateSource(StrEnum):
@@ -292,6 +310,8 @@ class ManagerTarget:
     manager_name: str
     capacity_percentage: float
     target_hours: float
+    monthly_workable_hours: float | None = None
+    capacity_source: CapacitySource | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,6 +339,10 @@ class ManagerAllocationSummary:
     difference_percentage: float
     accounts_assigned: int
     status: AllocationStatus
+    monthly_workable_hours: float | None = None
+    management_capacity_hours: float | None = None
+    capacity_remaining_hours: float | None = None
+    capacity_source: CapacitySource | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +355,10 @@ class ManagementAllocationResult:
     allocation_difference: float
     allocation_status: AllocationStatus
     split_account_count: int
+    total_management_capacity: float = 0.0
+    capacity_deficit_hours: float = 0.0
+    capacity_surplus_hours: float = 0.0
+    incidents: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

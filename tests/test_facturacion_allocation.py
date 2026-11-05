@@ -16,9 +16,11 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     AccountAssignment,
     AccountManagementCalculation,
     AllocationStatus,
+    CapacitySource,
     CalculationType,
     DailyHours,
     Person,
+    PersonMonthlyWorkCapacity,
     SheetAnalysis,
 )
 
@@ -47,7 +49,12 @@ def configuration(*managers: tuple[str, float]) -> BillingConfiguration:
     return result
 
 
-def analysis(sheet_name: str, *manager_names: str, base_hours: float = 100) -> SheetAnalysis:
+def analysis(
+    sheet_name: str,
+    *manager_names: str,
+    base_hours: float = 100,
+    monthly_hours: float = 181,
+) -> SheetAnalysis:
     normal_person = Person("N-1", "Persona Normal")
     managers = tuple(Person(f"M-{index}", name) for index, name in enumerate(manager_names, 1))
     assignment = AccountAssignment(
@@ -59,7 +66,24 @@ def analysis(sheet_name: str, *manager_names: str, base_hours: float = 100) -> S
         account_type=None,
         daily_hours=(DailyHours(1, base_hours),),
     )
-    return SheetAnalysis(sheet_name, (normal_person, *managers), (assignment,), (), (), 1)
+    capacities = tuple(
+        PersonMonthlyWorkCapacity(
+            employee_id=manager.employee_id,
+            person_name=manager.name,
+            monthly_workable_hours=monthly_hours,
+            capacity_source=CapacitySource.PERSON_TOTAL_HOURS,
+        )
+        for manager in managers
+    )
+    return SheetAnalysis(
+        sheet_name,
+        (normal_person, *managers),
+        (assignment,),
+        (),
+        (),
+        1,
+        capacities,
+    )
 
 
 class ManagerAllocationTests(unittest.TestCase):
@@ -75,7 +99,7 @@ class ManagerAllocationTests(unittest.TestCase):
         self.assertEqual(result.assignments[0].management_hours, 10)
         self.assertEqual(result.manager_summaries[0].assigned_hours, 10)
 
-    def test_two_equal_managers_split_fifty_fifty(self) -> None:
+    def test_two_equal_managers_are_not_forced_to_split_fifty_fifty(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea")
         result = calculate_management_allocation(
             source,
@@ -83,10 +107,10 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 100), ("Bea", 100)),
         )
 
-        self.assertEqual([item.target_hours for item in result.manager_summaries], [10, 10])
-        self.assertEqual([item.assigned_hours for item in result.manager_summaries], [10, 10])
+        self.assertEqual([item.target_hours for item in result.manager_summaries], [181, 181])
+        self.assertEqual([item.assigned_hours for item in result.manager_summaries], [20, 0])
 
-    def test_capacities_fifty_and_one_hundred_split_one_third_two_thirds(self) -> None:
+    def test_percentages_apply_to_each_manager_monthly_hours(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea")
         result = calculate_management_allocation(
             source,
@@ -94,10 +118,10 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 50), ("Bea", 100)),
         )
 
-        self.assertEqual([item.target_hours for item in result.manager_summaries], [10, 20])
-        self.assertEqual([item.assigned_hours for item in result.manager_summaries], [10, 20])
+        self.assertEqual([item.target_hours for item in result.manager_summaries], [90.5, 181])
+        self.assertEqual([item.assigned_hours for item in result.manager_summaries], [30, 0])
 
-    def test_four_manager_targets_follow_capacity_weights(self) -> None:
+    def test_four_manager_capacities_do_not_depend_on_total_management(self) -> None:
         source = analysis("Noviembre", "Daniel", "Jose", "Pedro", "Rafael")
         targets = calculate_manager_targets(
             100,
@@ -106,10 +130,10 @@ class ManagerAllocationTests(unittest.TestCase):
         )
 
         by_name = {item.manager_name: item.target_hours for item in targets}
-        self.assertAlmostEqual(by_name["Jose"], 14.2857142857)
-        self.assertAlmostEqual(by_name["Pedro"], 28.5714285714)
-        self.assertAlmostEqual(by_name["Rafael"], 28.5714285714)
-        self.assertAlmostEqual(by_name["Daniel"], 28.5714285714)
+        self.assertEqual(by_name["Jose"], 90.5)
+        self.assertEqual(by_name["Pedro"], 181)
+        self.assertEqual(by_name["Rafael"], 181)
+        self.assertEqual(by_name["Daniel"], 181)
 
     def test_total_is_exact_and_every_assignment_uses_half_hour_steps(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea", "Carla")
@@ -137,7 +161,7 @@ class ManagerAllocationTests(unittest.TestCase):
         self.assertEqual(len(result.assignments), 2)
 
     def test_account_is_split_when_needed_to_reach_targets(self) -> None:
-        source = analysis("Noviembre", "Ana", "Bea")
+        source = analysis("Noviembre", "Ana", "Bea", monthly_hours=5)
         result = calculate_management_allocation(
             source,
             (calculation("EXT-1", 10),),
@@ -199,18 +223,19 @@ class ManagerAllocationTests(unittest.TestCase):
         self.assertTrue(all(item.sheet_name == "Noviembre" for item in november.allocation_result.assignments))
         self.assertTrue(all(item.sheet_name == "Diciembre" for item in december.allocation_result.assignments))
 
-    def test_impossible_tolerance_is_reported_but_total_still_matches(self) -> None:
-        source = analysis("Noviembre", "Ana", "Bea")
+    def test_insufficient_capacity_is_reported_but_total_still_matches(self) -> None:
+        source = analysis("Noviembre", "Ana", "Bea", monthly_hours=0)
         result = calculate_management_allocation(
             source,
             (calculation("EXT-1", 0.5),),
             configuration(("Ana", 100), ("Bea", 100)),
         )
 
-        self.assertEqual(result.allocation_status, AllocationStatus.OUTSIDE_TOLERANCE)
+        self.assertEqual(result.allocation_status, AllocationStatus.INSUFFICIENT_CAPACITY)
         self.assertEqual(result.total_assigned_hours, 0.5)
         self.assertEqual(result.allocation_difference, 0)
-        self.assertTrue(all(item.status == AllocationStatus.OUTSIDE_TOLERANCE for item in result.manager_summaries))
+        self.assertEqual(result.capacity_deficit_hours, 0.5)
+        self.assertTrue(any(item.status == AllocationStatus.CAPACITY_EXCEEDED for item in result.manager_summaries))
 
     def test_rebalance_never_increases_total_deviation(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea", "Carla")

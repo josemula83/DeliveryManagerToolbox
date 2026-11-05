@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from io import BytesIO
+import math
 import re
 
 from openpyxl import load_workbook
@@ -12,10 +13,12 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountAssignment,
+    CapacitySource,
     ColumnMapping,
     DailyHours,
     ParsedAccountDescription,
     Person,
+    PersonMonthlyWorkCapacity,
     SheetAnalysis,
     WorkbookAnalysis,
     WorksheetInfo,
@@ -86,6 +89,7 @@ def parse_hierarchical_worksheet(
         raw_columns = tuple(get_column_letter(index) for index in range(1, max_column + 1))
         raw_rows: list[tuple[object, ...]] = []
         people_by_id: dict[str, Person] = {}
+        capacities_by_id: dict[str, PersonMonthlyWorkCapacity] = {}
         assignments: list[AccountAssignment] = []
         current_person: Person | None = None
         day_headers: tuple[object, ...] = ()
@@ -108,6 +112,9 @@ def parse_hierarchical_worksheet(
                     normalize_identifier(employee_id),
                     Person(employee_id=employee_id, name=clean_display_value(column_b, "La persona")),
                 )
+                capacity = _person_monthly_capacity(current_person, day_headers, row[2:])
+                if capacity is not None:
+                    capacities_by_id[normalize_identifier(employee_id)] = capacity
                 continue
 
             if current_person is not None and _is_account_row(column_a, column_b):
@@ -132,6 +139,7 @@ def parse_hierarchical_worksheet(
             raw_columns=raw_columns,
             raw_rows=tuple(raw_rows),
             scanned_rows=scanned_rows,
+            person_monthly_capacities=tuple(capacities_by_id.values()),
         )
     finally:
         workbook.close()
@@ -253,6 +261,8 @@ def _employee_id(value: object) -> str:
 def _daily_hours(headers: tuple[object, ...], values: tuple[object, ...]) -> tuple[DailyHours, ...]:
     result: list[DailyHours] = []
     for index, value in enumerate(values):
+        if index < len(headers) and _is_total_hours_header(headers[index]):
+            continue
         if value is None or value == "" or isinstance(value, bool):
             continue
         if not isinstance(value, (int, float)):
@@ -260,6 +270,65 @@ def _daily_hours(headers: tuple[object, ...], values: tuple[object, ...]) -> tup
         day = headers[index] if index < len(headers) and headers[index] is not None else index + 1
         result.append(DailyHours(day=day, hours=float(value)))
     return tuple(result)
+
+
+def _person_monthly_capacity(
+    person: Person,
+    headers: tuple[object, ...],
+    values: tuple[object, ...],
+) -> PersonMonthlyWorkCapacity | None:
+    for index, header in enumerate(headers):
+        if not _is_total_hours_header(header) or index >= len(values):
+            continue
+        value = values[index]
+        if _is_valid_workable_hour_value(value):
+            return PersonMonthlyWorkCapacity(
+                employee_id=person.employee_id,
+                person_name=person.name,
+                monthly_workable_hours=float(value),
+                capacity_source=CapacitySource.PERSON_TOTAL_HOURS,
+            )
+
+    daily_total = sum(
+        float(value)
+        for index, value in enumerate(values)
+        if (index >= len(headers) or not _is_total_hours_header(headers[index]))
+        and _is_valid_workable_hour_value(value)
+    )
+    has_numeric_daily_value = any(
+        (index >= len(headers) or not _is_total_hours_header(headers[index]))
+        and _is_valid_workable_hour_value(value)
+        for index, value in enumerate(values)
+    )
+    if not has_numeric_daily_value:
+        return None
+    return PersonMonthlyWorkCapacity(
+        employee_id=person.employee_id,
+        person_name=person.name,
+        monthly_workable_hours=daily_total,
+        capacity_source=CapacitySource.DAILY_HOURS,
+    )
+
+
+def _is_total_hours_header(value: object) -> bool:
+    if value is None:
+        return False
+    return normalize_identifier(value) in {
+        "horas",
+        "hours",
+        "total horas",
+        "horas total",
+        "total hours",
+    }
+
+
+def _is_valid_workable_hour_value(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
 
 
 def _decimal_number(value: str) -> float:
