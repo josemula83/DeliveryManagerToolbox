@@ -78,7 +78,7 @@ De cada descripción se conservan el texto original, código EXT, servicio, tari
 
 La pantalla permite crear, editar y eliminar:
 
-- personas en gestión y su capacidad libre entre 0 y 100 %;
+- personas en gestión y su porcentaje objetivo entre 0 y 100 %;
 - cuentas sin gestión, excluidas del futuro reparto de horas de gestión;
 - cuentas con horas de gestión fija en incrementos de 0,5 h;
 - bloques de cuentas con una tarifa de gestión en €/h;
@@ -92,9 +92,9 @@ La primera fase del motor recibe obligatoriamente un `SheetAnalysis` y crea un m
 
 La interfaz permite calcular solo la hoja seleccionada o todas las hojas compatibles. El modo multihoja crea un `WorkbookCalculationResult` y llama al mismo motor una vez por cada `SheetAnalysis`; conserva los resultados y auditorías separados por nombre de hoja. Las hojas sin personas o asignaciones reconocibles se omiten con un aviso y no impiden calcular los demás meses.
 
-Después de calcular las horas de gestión por cuenta, el motor obtiene la capacidad laboral de cada Persona en Gestión desde su fila de la hoja activa. Usa primero el total `Horas` y, si falta, suma únicamente los valores diarios numéricos; los códigos de vacaciones, festivos o ausencias no se convierten en horas. La capacidad máxima de gestión es `horas laborables del mes × porcentaje configurado`, nunca un peso sobre la bolsa total. El reparto usa escalones de 0,5 h, respeta esas capacidades mientras sea posible, informa del déficit real cuando resultan insuficientes y mantiene el cuadre exacto por cuenta y mes.
+Después de calcular las horas de gestión por cuenta, el motor obtiene las horas laborables mensuales de cada Persona en Gestión desde su fila de la hoja activa. Usa primero el total `Horas` y, si falta, suma únicamente los valores diarios numéricos; los códigos de vacaciones, festivos o ausencias no se convierten en horas. El objetivo base es `horas laborables del mes × porcentaje configurado`, nunca un peso sobre la bolsa total ni un límite rígido. El primer barrido mantiene las cuentas completas siempre que encajen razonablemente en el rango preferente de ±10 %. Si la gestión supera la suma de objetivos base, reparte todo el excedente de forma equitativa en escalones de 0,5 h y mantiene el cuadre exacto por cuenta y mes.
 
-La fase de tarifas toma esas asignaciones sin cambiar sus horas. Una tarifa de bloque configurada tiene prioridad; para las demás cuentas se usa la tarifa máxima detectada en la hoja activa. Los registros del mismo gestor y cuenta se consolidan con una única tarifa, se calculan importes y tarifas medias ponderadas, y las cuentas sin tarifa producen incidencias explícitas. Las tarifas nunca se comparten entre meses.
+La fase de tarifas se ejecuta explícitamente después del reparto y toma esas asignaciones sin cambiar sus horas. Una tarifa de bloque configurada tiene prioridad; para las demás cuentas se usa la tarifa máxima detectada en la hoja activa. Los registros del mismo gestor y cuenta se consolidan con una única tarifa, se calculan importes y tarifas medias ponderadas, y las cuentas sin tarifa producen incidencias explícitas. Las tarifas nunca se comparten entre meses.
 
 Responsabilidades internas:
 

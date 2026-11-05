@@ -13,6 +13,7 @@ from streamlit.typing import UploadedFile
 from delivery_manager_toolbox.core.logging import get_logger
 from delivery_manager_toolbox.modules.facturacion.business import (
     calculate_sheet_management,
+    calculate_sheet_rate_optimization,
     calculate_workbook_management,
 )
 from delivery_manager_toolbox.modules.facturacion.configuration import (
@@ -151,7 +152,12 @@ def render_page() -> None:
             key="calculate_all_billing",
         )
     if calculate_individual and analysis is not None:
-        st.session_state[_RESULT_KEY] = calculate_sheet_management(analysis, _configuration())
+        result = calculate_sheet_management(analysis, _configuration())
+        st.session_state[_RESULT_KEY] = calculate_sheet_rate_optimization(
+            result,
+            analysis,
+            _configuration(),
+        )
         st.session_state[_RESULT_CONTEXT_KEY] = calculation_context
         st.session_state.pop(_WORKBOOK_RESULT_KEY, None)
         st.session_state.pop(_WORKBOOK_RESULT_CONTEXT_KEY, None)
@@ -957,16 +963,21 @@ def _render_management_allocation(
         return
 
     metrics = st.columns(5)
-    metrics[0].metric("Gestores", len(allocation.manager_summaries), border=True, height="stretch")
-    metrics[1].metric(
+    metrics[0].metric(
         "Horas gestión necesarias",
         _format_hours(allocation.total_management_hours),
         border=True,
         height="stretch",
     )
+    metrics[1].metric(
+        "Objetivo base total gestores",
+        _format_hours(allocation.total_base_target_hours),
+        border=True,
+        height="stretch",
+    )
     metrics[2].metric(
-        "Capacidad total gestores",
-        _format_hours(allocation.total_management_capacity),
+        "Excedente de gestión",
+        _format_hours(allocation.overflow_hours),
         border=True,
         height="stretch",
     )
@@ -976,13 +987,16 @@ def _render_management_allocation(
         border=True,
         height="stretch",
     )
-    balance_label = "Déficit de capacidad" if allocation.capacity_deficit_hours else "Capacidad sobrante"
-    balance_value = allocation.capacity_deficit_hours or allocation.capacity_surplus_hours
-    metrics[4].metric(balance_label, _format_hours(balance_value), border=True, height="stretch")
-    if allocation.allocation_status == AllocationStatus.INSUFFICIENT_CAPACITY:
-        st.warning(
-            "Capacidad insuficiente: el reparto cuadra las horas requeridas, pero supera "
-            f"la capacidad mensual total en {_format_hours(allocation.capacity_deficit_hours)}."
+    metrics[4].metric(
+        "Diferencia",
+        _format_hours(allocation.allocation_difference),
+        border=True,
+        height="stretch",
+    )
+    if allocation.overflow_hours:
+        st.info(
+            "La gestión supera los objetivos base en "
+            f"{_format_hours(allocation.overflow_hours)}; el excedente se reparte equitativamente."
         )
     if allocation.incidents:
         st.warning("\n".join(f"- {incident}" for incident in allocation.incidents))
@@ -992,9 +1006,10 @@ def _render_management_allocation(
             "Gestor": item.manager_name,
             "Capacidad %": item.capacity_percentage,
             "Horas laborables mes": item.monthly_workable_hours,
-            "Capacidad gestión": item.management_capacity_hours,
+            "Objetivo base": item.base_target_hours,
+            "Rango preferente": f"{item.preferred_min_hours:.2f}–{item.preferred_max_hours:.2f} h",
             "Horas gestión asignadas": item.assigned_hours,
-            "Capacidad restante": item.capacity_remaining_hours,
+            "Excedente asignado": item.overflow_hours_assigned,
             "Nº cuentas": item.accounts_assigned,
             "Estado": item.status.value,
         }
@@ -1008,20 +1023,20 @@ def _render_management_allocation(
         column_config={
             "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
             "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
-            "Capacidad gestión": st.column_config.NumberColumn(format="%.2f h"),
+            "Objetivo base": st.column_config.NumberColumn(format="%.2f h"),
             "Horas gestión asignadas": st.column_config.NumberColumn(format="%.2f h"),
-            "Capacidad restante": st.column_config.NumberColumn(format="%.2f h"),
+            "Excedente asignado": st.column_config.NumberColumn(format="%.2f h"),
         },
     )
 
-    with st.expander("Ver cálculo de capacidad"):
+    with st.expander("Ver cálculo del objetivo base"):
         capacity_rows = pd.DataFrame([
             {
                 "Gestor": item.manager_name,
                 "Hoja": allocation.sheet_name,
                 "Horas laborables": item.monthly_workable_hours,
                 "Capacidad %": item.capacity_percentage,
-                "Capacidad gestión": item.management_capacity_hours,
+                "Objetivo base": item.base_target_hours,
                 "Origen del dato": item.capacity_source.value if item.capacity_source is not None else "NO ENCONTRADO",
             }
             for item in allocation.manager_summaries
@@ -1030,11 +1045,11 @@ def _render_management_allocation(
             capacity_rows,
             hide_index=True,
             width="stretch",
-            alt="Origen y cálculo de capacidad mensual por gestor",
+            alt="Origen y cálculo del objetivo base mensual por gestor",
             column_config={
                 "Horas laborables": st.column_config.NumberColumn(format="%.2f h"),
                 "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
-                "Capacidad gestión": st.column_config.NumberColumn(format="%.2f h"),
+                "Objetivo base": st.column_config.NumberColumn(format="%.2f h"),
             },
         )
 

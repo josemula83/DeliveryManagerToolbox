@@ -60,9 +60,9 @@ def allocation(
             employee_id=employee_id,
             manager_name=manager_name,
             capacity_percentage=100,
-            target_hours=sum(item.management_hours for item in assignments if item.employee_id == employee_id),
+            base_target_hours=sum(item.management_hours for item in assignments if item.employee_id == employee_id),
             assigned_hours=sum(item.management_hours for item in assignments if item.employee_id == employee_id),
-            difference_hours=0,
+            difference_vs_base_target=0,
             difference_percentage=0,
             accounts_assigned=len({item.account_code for item in assignments if item.employee_id == employee_id}),
             status=(

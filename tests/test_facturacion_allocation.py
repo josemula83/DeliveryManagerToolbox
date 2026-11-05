@@ -7,7 +7,10 @@ from delivery_manager_toolbox.modules.facturacion.allocation import (
     rebalance_allocations,
     validate_allocation,
 )
-from delivery_manager_toolbox.modules.facturacion.business import calculate_sheet_management
+from delivery_manager_toolbox.modules.facturacion.business import (
+    calculate_sheet_management,
+    calculate_sheet_rate_optimization,
+)
 from delivery_manager_toolbox.modules.facturacion.configuration import (
     BillingConfiguration,
     add_management_person,
@@ -107,7 +110,7 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 100), ("Bea", 100)),
         )
 
-        self.assertEqual([item.target_hours for item in result.manager_summaries], [181, 181])
+        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [181, 181])
         self.assertEqual([item.assigned_hours for item in result.manager_summaries], [20, 0])
 
     def test_percentages_apply_to_each_manager_monthly_hours(self) -> None:
@@ -118,7 +121,7 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 50), ("Bea", 100)),
         )
 
-        self.assertEqual([item.target_hours for item in result.manager_summaries], [90.5, 181])
+        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [90.5, 181])
         self.assertEqual([item.assigned_hours for item in result.manager_summaries], [30, 0])
 
     def test_four_manager_capacities_do_not_depend_on_total_management(self) -> None:
@@ -129,7 +132,7 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Jose", 50), ("Pedro", 100), ("Rafael", 100), ("Daniel", 100)),
         )
 
-        by_name = {item.manager_name: item.target_hours for item in targets}
+        by_name = {item.manager_name: item.base_target_hours for item in targets}
         self.assertEqual(by_name["Jose"], 90.5)
         self.assertEqual(by_name["Pedro"], 181)
         self.assertEqual(by_name["Rafael"], 181)
@@ -223,7 +226,7 @@ class ManagerAllocationTests(unittest.TestCase):
         self.assertTrue(all(item.sheet_name == "Noviembre" for item in november.allocation_result.assignments))
         self.assertTrue(all(item.sheet_name == "Diciembre" for item in december.allocation_result.assignments))
 
-    def test_insufficient_capacity_is_reported_but_total_still_matches(self) -> None:
+    def test_overflow_is_reported_and_total_still_matches(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea", monthly_hours=0)
         result = calculate_management_allocation(
             source,
@@ -231,11 +234,28 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 100), ("Bea", 100)),
         )
 
-        self.assertEqual(result.allocation_status, AllocationStatus.INSUFFICIENT_CAPACITY)
+        self.assertEqual(result.allocation_status, AllocationStatus.ABOVE_TARGET_DUE_TO_OVERFLOW)
         self.assertEqual(result.total_assigned_hours, 0.5)
         self.assertEqual(result.allocation_difference, 0)
-        self.assertEqual(result.capacity_deficit_hours, 0.5)
-        self.assertTrue(any(item.status == AllocationStatus.CAPACITY_EXCEEDED for item in result.manager_summaries))
+        self.assertEqual(result.overflow_hours, 0.5)
+        self.assertTrue(any(
+            item.status == AllocationStatus.ABOVE_TARGET_DUE_TO_OVERFLOW
+            for item in result.manager_summaries
+        ))
+
+    def test_rate_optimization_runs_only_in_explicit_later_phase(self) -> None:
+        source = analysis("Noviembre", "Ana")
+        config = configuration(("Ana", 100))
+
+        allocated = calculate_sheet_management(source, config)
+        optimized = calculate_sheet_rate_optimization(allocated, source, config)
+
+        self.assertIsNone(allocated.rate_optimization_result)
+        self.assertIsNotNone(optimized.rate_optimization_result)
+        self.assertEqual(
+            optimized.rate_optimization_result.billing_summary.total_management_hours,
+            allocated.allocation_result.total_assigned_hours,
+        )
 
     def test_rebalance_never_increases_total_deviation(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea", "Carla")
@@ -246,7 +266,7 @@ class ManagerAllocationTests(unittest.TestCase):
 
         rebalanced = rebalance_allocations(initial, targets)
 
-        target_by_name = {item.manager_name: item.target_hours for item in targets}
+        target_by_name = {item.manager_name: item.base_target_hours for item in targets}
         self.assertLessEqual(
             self._deviation(rebalanced, target_by_name),
             self._deviation(initial, target_by_name),

@@ -217,11 +217,6 @@ def calculate_sheet_management(
     calculations = calculate_all_accounts(base_hours, configuration)
     summary = build_calculation_summary(calculations, clean_model.audit)
     allocation_result = calculate_management_allocation(analysis, calculations, configuration)
-    rate_optimization_result = optimize_management_rates(
-        analysis,
-        allocation_result,
-        configuration,
-    )
     incidents = (
         ("No se pudo repartir la gestión: configura al menos una Persona en Gestión con capacidad positiva.",)
         if summary.total_management_hours > 0 and allocation_result is None
@@ -233,8 +228,25 @@ def calculate_sheet_management(
         account_calculations=calculations,
         clean_model=clean_model,
         allocation_result=allocation_result,
-        rate_optimization_result=rate_optimization_result,
         incidents=incidents,
+    )
+
+
+def calculate_sheet_rate_optimization(
+    result: SheetCalculationResult,
+    analysis: SheetAnalysis,
+    configuration: BillingConfiguration,
+) -> SheetCalculationResult:
+    """Ejecuta tarifas como fase explícita posterior al cálculo y reparto."""
+    if result.sheet_name != analysis.sheet_name:
+        raise ValueError("El resultado y el análisis deben pertenecer a la misma hoja.")
+    return replace(
+        result,
+        rate_optimization_result=optimize_management_rates(
+            analysis,
+            result.allocation_result,
+            configuration,
+        ),
     )
 
 
@@ -251,7 +263,12 @@ def calculate_workbook_management(
         if incompatibility is not None:
             skipped.append(SkippedSheet(analysis.sheet_name, incompatibility))
             continue
-        results_by_sheet[analysis.sheet_name] = calculate_sheet_management(
+        result = calculate_sheet_management(
+            analysis,
+            configuration,
+        )
+        results_by_sheet[analysis.sheet_name] = calculate_sheet_rate_optimization(
+            result,
             analysis,
             configuration,
         )
@@ -318,6 +335,7 @@ __all__ = [
     "calculate_all_accounts",
     "calculate_billing",
     "calculate_sheet_management",
+    "calculate_sheet_rate_optimization",
     "calculate_workbook_management",
     "calculate_management_hours",
 ]

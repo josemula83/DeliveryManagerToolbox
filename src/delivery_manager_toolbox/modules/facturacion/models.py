@@ -286,9 +286,10 @@ class AllocationStatus(StrEnum):
     OK = "OK"
     OUTSIDE_TOLERANCE = "OUTSIDE_TOLERANCE"
     CAPACITY_OK = "CAPACITY_OK"
-    INSUFFICIENT_CAPACITY = "INSUFFICIENT_CAPACITY"
-    CAPACITY_EXCEEDED = "CAPACITY_EXCEEDED"
-    CAPACITY_NOT_FOUND = "CAPACITY_NOT_FOUND"
+    WITHIN_TARGET = "WITHIN_TARGET"
+    ABOVE_TARGET_DUE_TO_OVERFLOW = "ABOVE_TARGET_DUE_TO_OVERFLOW"
+    BELOW_TARGET = "BELOW_TARGET"
+    CAPACITY_DATA_MISSING = "CAPACITY_DATA_MISSING"
 
 
 class RateSource(StrEnum):
@@ -309,9 +310,17 @@ class ManagerTarget:
     employee_id: str
     manager_name: str
     capacity_percentage: float
-    target_hours: float
+    base_target_hours: float
     monthly_workable_hours: float | None = None
     capacity_source: CapacitySource | None = None
+
+    @property
+    def preferred_min_hours(self) -> float:
+        return self.base_target_hours * 0.90
+
+    @property
+    def preferred_max_hours(self) -> float:
+        return self.base_target_hours * 1.10
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,17 +342,17 @@ class ManagerAllocationSummary:
     employee_id: str
     manager_name: str
     capacity_percentage: float
-    target_hours: float
+    base_target_hours: float
     assigned_hours: float
-    difference_hours: float
+    difference_vs_base_target: float
     difference_percentage: float
     accounts_assigned: int
     status: AllocationStatus
     monthly_workable_hours: float | None = None
-    management_capacity_hours: float | None = None
-    capacity_remaining_hours: float | None = None
     capacity_source: CapacitySource | None = None
-
+    preferred_min_hours: float = 0.0
+    preferred_max_hours: float = 0.0
+    overflow_hours_assigned: float = 0.0
 
 @dataclass(frozen=True, slots=True)
 class ManagementAllocationResult:
@@ -355,10 +364,9 @@ class ManagementAllocationResult:
     allocation_difference: float
     allocation_status: AllocationStatus
     split_account_count: int
-    total_management_capacity: float = 0.0
-    capacity_deficit_hours: float = 0.0
-    capacity_surplus_hours: float = 0.0
     incidents: tuple[str, ...] = ()
+    total_base_target_hours: float = 0.0
+    overflow_hours: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
