@@ -22,6 +22,7 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     SheetAnalysis,
 )
 from delivery_manager_toolbox.modules.facturacion.validation import normalize_identifier
+from delivery_manager_toolbox.modules.facturacion.work_calendar import calculate_manager_base_target
 
 
 ALLOCATION_STEP = 0.5
@@ -49,7 +50,10 @@ def calculate_manager_targets(
         resolution = resolutions[normalize_identifier(item.name)]
         monthly_workable_hours = resolution.monthly_workable_hours
         base_target_hours = (
-            monthly_workable_hours * item.free_capacity_percentage / 100
+            calculate_manager_base_target(
+                monthly_workable_hours,
+                item.free_capacity_percentage,
+            )
             if monthly_workable_hours is not None
             else 0.0
         )
@@ -268,7 +272,12 @@ def build_manager_summary(
             if target.base_target_hours > _FLOAT_TOLERANCE
             else 0.0
         )
-        if target.monthly_workable_hours is None:
+        if (
+            target.resolution is not None
+            and target.resolution.matched_employee_id is None
+        ):
+            status = AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET
+        elif target.monthly_workable_hours is None:
             status = AllocationStatus.CAPACITY_DATA_MISSING
         elif assigned_hours > target.base_target_hours + _FLOAT_TOLERANCE:
             status = AllocationStatus.ABOVE_TARGET_DUE_TO_OVERFLOW
@@ -311,6 +320,11 @@ def calculate_management_allocation(
     if missing_targets:
         summaries = build_manager_summary(targets, ())
         incidents = tuple(_missing_capacity_incident(target) for target in missing_targets)
+        missing_manager = any(
+            target.resolution is not None
+            and target.resolution.matched_employee_id is None
+            for target in missing_targets
+        )
         return ManagementAllocationResult(
             sheet_name=analysis.sheet_name,
             assignments=(),
@@ -318,7 +332,11 @@ def calculate_management_allocation(
             total_management_hours=total_management_hours,
             total_assigned_hours=0.0,
             allocation_difference=-total_management_hours,
-            allocation_status=AllocationStatus.CAPACITY_DATA_MISSING,
+            allocation_status=(
+                AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET
+                if missing_manager
+                else AllocationStatus.CAPACITY_DATA_MISSING
+            ),
             split_account_count=0,
             incidents=incidents,
             total_base_target_hours=sum(item.base_target_hours for item in targets),
@@ -366,7 +384,7 @@ def _missing_capacity_incident(target: ManagerTarget) -> str:
     resolution = target.resolution
     if resolution is None or resolution.matched_employee_id is None:
         return (
-            "MANAGER_NOT_FOUND_IN_ACTIVE_SHEET: "
+            "MANAGER_NOT_FOUND_IN_SHEET: "
             f"{target.manager_name}. Gestor no localizado en la hoja activa."
         )
     return (

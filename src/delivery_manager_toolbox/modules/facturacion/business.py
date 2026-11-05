@@ -237,7 +237,10 @@ def calculate_sheet_rate_optimization(
         raise ValueError("El resultado y el análisis deben pertenecer a la misma hoja.")
     if (
         result.allocation_result is not None
-        and result.allocation_result.allocation_status == AllocationStatus.CAPACITY_DATA_MISSING
+        and result.allocation_result.allocation_status in {
+            AllocationStatus.CAPACITY_DATA_MISSING,
+            AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET,
+        }
     ):
         return result
     return replace(

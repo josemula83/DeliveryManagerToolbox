@@ -77,19 +77,20 @@ def _inspect_uploaded_workbook(contents: bytes, filename: str) -> WorkbookAnalys
 
 
 @st.cache_data(show_spinner=False, max_entries=20)
-def _parse_uploaded_sheet(contents: bytes, sheet: str) -> SheetAnalysis:
-    return parse_hierarchical_worksheet(contents, sheet)
+def _parse_uploaded_sheet(contents: bytes, sheet: str, filename: str) -> SheetAnalysis:
+    return parse_hierarchical_worksheet(contents, sheet, filename=filename)
 
 
 def _parse_workbook_sheets(
     contents: bytes,
     sheet_names: Iterable[str],
+    filename: str,
 ) -> tuple[tuple[SheetAnalysis, ...], tuple[SkippedSheet, ...]]:
     analyses: list[SheetAnalysis] = []
     skipped: list[SkippedSheet] = []
     for sheet_name in sheet_names:
         try:
-            analyses.append(_parse_uploaded_sheet(contents, sheet_name))
+            analyses.append(_parse_uploaded_sheet(contents, sheet_name, filename))
         except WorkbookInspectionError as exc:
             skipped.append(SkippedSheet(sheet_name, str(exc)))
     return tuple(analyses), tuple(skipped)
@@ -111,6 +112,7 @@ def render_page() -> None:
         sheet_analyses, _ = _parse_workbook_sheets(
             uploaded_file.getvalue(),
             workbook_info.sheet_names,
+            uploaded_file.name,
         )
         reconciled, removed = reconcile_management_person_account_exceptions_for_sheets(
             _configuration(),
@@ -166,6 +168,7 @@ def render_page() -> None:
         analyses, parse_skipped = _parse_workbook_sheets(
             uploaded_file.getvalue(),
             workbook_info.sheet_names,
+            uploaded_file.name,
         )
         st.session_state[_WORKBOOK_RESULT_KEY] = calculate_workbook_management(
             analyses,
@@ -256,7 +259,7 @@ def _render_workbook(
         )
         if sheet != configuration.source_sheet:
             st.session_state[_CONFIG_KEY] = with_source_sheet(configuration, sheet)
-        analysis = _parse_uploaded_sheet(contents, sheet)
+        analysis = _parse_uploaded_sheet(contents, sheet, uploaded_file.name)
     except WorkbookInspectionError as exc:
         st.error(str(exc), icon=":material/error:")
         return None, None
@@ -1010,11 +1013,17 @@ def _render_management_allocation(
         border=True,
         height="stretch",
     )
-    if allocation.allocation_status == AllocationStatus.CAPACITY_DATA_MISSING:
+    if allocation.allocation_status in {
+        AllocationStatus.CAPACITY_DATA_MISSING,
+        AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET,
+    }:
         affected = ", ".join(
             item.manager_name
             for item in allocation.manager_summaries
-            if item.status == AllocationStatus.CAPACITY_DATA_MISSING
+            if item.status in {
+                AllocationStatus.CAPACITY_DATA_MISSING,
+                AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET,
+            }
         )
         st.error(
             "Reparto bloqueado: hay Personas en Gestión sin jornada mensual resuelta. "
@@ -1082,15 +1091,34 @@ def _render_management_allocation(
         },
     )
 
-    with st.expander("Ver cálculo del objetivo base"):
+    resolution_by_name = {
+        item.configured_manager_name: item
+        for item in allocation.management_person_resolutions
+    }
+    with st.expander("Ver cálculo de capacidad"):
         capacity_rows = pd.DataFrame([
             {
                 "Gestor": item.manager_name,
-                "Hoja": allocation.sheet_name,
-                "Horas laborables": item.monthly_workable_hours,
+                "Periodo": (
+                    f"{resolution_by_name[item.manager_name].work_calendar.month:02d}/"
+                    f"{resolution_by_name[item.manager_name].work_calendar.year}"
+                    if resolution_by_name.get(item.manager_name) is not None
+                    and resolution_by_name[item.manager_name].work_calendar is not None
+                    else allocation.sheet_name
+                ),
+                "Horas teóricas calendario": (
+                    resolution_by_name[item.manager_name].theoretical_monthly_hours
+                    if resolution_by_name.get(item.manager_name) is not None
+                    else None
+                ),
+                "Horas descontadas por ausencias": (
+                    resolution_by_name[item.manager_name].absence_hours
+                    if resolution_by_name.get(item.manager_name) is not None
+                    else None
+                ),
+                "Horas laborables mes": item.monthly_workable_hours,
                 "Capacidad %": item.capacity_percentage,
                 "Objetivo base": item.base_target_hours,
-                "Origen del dato": item.capacity_source.value if item.capacity_source is not None else "NO ENCONTRADO",
             }
             for item in allocation.manager_summaries
         ])
@@ -1100,11 +1128,43 @@ def _render_management_allocation(
             width="stretch",
             alt="Origen y cálculo del objetivo base mensual por gestor",
             column_config={
-                "Horas laborables": st.column_config.NumberColumn(format="%.2f h"),
+                "Horas teóricas calendario": st.column_config.NumberColumn(format="%.2f h"),
+                "Horas descontadas por ausencias": st.column_config.NumberColumn(format="%.2f h"),
+                "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
                 "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
                 "Objetivo base": st.column_config.NumberColumn(format="%.2f h"),
             },
         )
+
+    calendars = tuple(
+        resolution.work_calendar
+        for resolution in allocation.management_person_resolutions
+        if resolution.work_calendar is not None
+    )
+    if calendars:
+        with st.expander("Ver calendario de capacidad"):
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Gestor": work_calendar.manager_name,
+                        "Día": day.day,
+                        "Fecha": day.date_label,
+                        "Día semana": day.weekday_name,
+                        "Horas teóricas": day.theoretical_hours,
+                        "Código ausencia": day.absence_code or "-",
+                        "Horas capacidad final": day.capacity_hours,
+                    }
+                    for work_calendar in calendars
+                    for day in work_calendar.daily_capacity
+                ]),
+                hide_index=True,
+                width="stretch",
+                alt="Calendario diario de capacidad laboral por gestor",
+                column_config={
+                    "Horas teóricas": st.column_config.NumberColumn(format="%.2f h"),
+                    "Horas capacidad final": st.column_config.NumberColumn(format="%.2f h"),
+                },
+            )
 
     st.markdown("##### Detalle del reparto")
     manager_options = tuple(item.manager_name for item in allocation.manager_summaries)

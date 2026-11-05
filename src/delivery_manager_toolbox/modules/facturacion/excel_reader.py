@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from io import BytesIO
-import math
 import re
 
 from openpyxl import load_workbook
@@ -25,6 +24,12 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     WorksheetPreview,
 )
 from delivery_manager_toolbox.modules.facturacion.validation import clean_display_value, normalize_identifier
+from delivery_manager_toolbox.modules.facturacion.work_calendar import (
+    apply_absences_to_calendar,
+    build_theoretical_work_calendar,
+    detect_person_absences,
+    resolve_sheet_period,
+)
 
 
 class WorkbookInspectionError(ValueError):
@@ -77,6 +82,7 @@ def parse_hierarchical_worksheet(
     contents: bytes,
     sheet_name: str,
     *,
+    filename: str | None = None,
     raw_sample_size: int = 50,
 ) -> SheetAnalysis:
     """Convierte una hoja BBVA jerárquica en personas y asignaciones normalizadas."""
@@ -89,10 +95,11 @@ def parse_hierarchical_worksheet(
         raw_columns = tuple(get_column_letter(index) for index in range(1, max_column + 1))
         raw_rows: list[tuple[object, ...]] = []
         people_by_id: dict[str, Person] = {}
-        capacities_by_id: dict[str, PersonMonthlyWorkCapacity] = {}
+        absences_by_id: dict[str, dict[int, str]] = {}
         assignments: list[AccountAssignment] = []
         current_person: Person | None = None
         day_headers: tuple[object, ...] = ()
+        period: tuple[int, int] | None = None
         scanned_rows = 0
 
         for row_number, values in enumerate(worksheet.iter_rows(values_only=True), 1):
@@ -102,6 +109,12 @@ def parse_hierarchical_worksheet(
                 raw_rows.append(row)
             if row_number == 1:
                 day_headers = tuple(row[2:])
+                period = resolve_sheet_period(
+                    filename,
+                    sheet_name,
+                    workbook.sheetnames,
+                    day_headers,
+                )
                 continue
 
             column_a = row[0] if len(row) > 0 else None
@@ -116,10 +129,31 @@ def parse_hierarchical_worksheet(
                         source_row=row_number,
                     ),
                 )
-                capacity = _person_monthly_capacity(current_person, day_headers, row[2:])
-                if capacity is not None:
-                    capacities_by_id[normalize_identifier(employee_id)] = capacity
+                if period is not None:
+                    year, month = period
+                    absences_by_id.setdefault(normalize_identifier(employee_id), {}).update(
+                        detect_person_absences(
+                            day_headers,
+                            row[2:],
+                            year,
+                            month,
+                            column_b,
+                        )
+                    )
                 continue
+
+            if current_person is not None and period is not None:
+                year, month = period
+                person_key = normalize_identifier(current_person.employee_id)
+                absences_by_id.setdefault(person_key, {}).update(
+                    detect_person_absences(
+                        day_headers,
+                        row[2:],
+                        year,
+                        month,
+                        column_b,
+                    )
+                )
 
             if current_person is not None and _is_account_row(column_a, column_b):
                 description = clean_display_value(column_b, "La descripción de cuenta")
@@ -136,6 +170,34 @@ def parse_hierarchical_worksheet(
                     )
                 )
 
+        calendars = ()
+        capacities = ()
+        if period is not None:
+            year, month = period
+            calendars = tuple(
+                apply_absences_to_calendar(
+                    build_theoretical_work_calendar(person, sheet_name, year, month),
+                    absences_by_id.get(normalize_identifier(person.employee_id), {}),
+                )
+                for person in people_by_id.values()
+            )
+            capacities = tuple(
+                PersonMonthlyWorkCapacity(
+                    employee_id=item.employee_id,
+                    person_name=item.manager_name,
+                    monthly_workable_hours=item.monthly_workable_hours,
+                    capacity_source=CapacitySource.THEORETICAL_CALENDAR,
+                    source_row=next(
+                        person.source_row
+                        for person in people_by_id.values()
+                        if normalize_identifier(person.employee_id)
+                        == normalize_identifier(item.employee_id)
+                    ),
+                    theoretical_monthly_hours=item.theoretical_monthly_hours,
+                    absence_hours=item.absence_hours,
+                )
+                for item in calendars
+            )
         return SheetAnalysis(
             sheet_name=sheet_name,
             people=tuple(people_by_id.values()),
@@ -143,7 +205,10 @@ def parse_hierarchical_worksheet(
             raw_columns=raw_columns,
             raw_rows=tuple(raw_rows),
             scanned_rows=scanned_rows,
-            person_monthly_capacities=tuple(capacities_by_id.values()),
+            person_monthly_capacities=capacities,
+            period_year=period[0] if period is not None else None,
+            period_month=period[1] if period is not None else None,
+            manager_work_calendars=calendars,
         )
     finally:
         workbook.close()
@@ -276,46 +341,6 @@ def _daily_hours(headers: tuple[object, ...], values: tuple[object, ...]) -> tup
     return tuple(result)
 
 
-def _person_monthly_capacity(
-    person: Person,
-    headers: tuple[object, ...],
-    values: tuple[object, ...],
-) -> PersonMonthlyWorkCapacity | None:
-    for index, header in enumerate(headers):
-        if not _is_total_hours_header(header) or index >= len(values):
-            continue
-        value = values[index]
-        if _is_valid_workable_hour_value(value):
-            return PersonMonthlyWorkCapacity(
-                employee_id=person.employee_id,
-                person_name=person.name,
-                monthly_workable_hours=float(value),
-                capacity_source=CapacitySource.PERSON_TOTAL_HOURS,
-                source_row=person.source_row,
-            )
-
-    daily_total = sum(
-        float(value)
-        for index, value in enumerate(values)
-        if (index >= len(headers) or not _is_total_hours_header(headers[index]))
-        and _is_valid_workable_hour_value(value)
-    )
-    has_numeric_daily_value = any(
-        (index >= len(headers) or not _is_total_hours_header(headers[index]))
-        and _is_valid_workable_hour_value(value)
-        for index, value in enumerate(values)
-    )
-    if not has_numeric_daily_value:
-        return None
-    return PersonMonthlyWorkCapacity(
-        employee_id=person.employee_id,
-        person_name=person.name,
-        monthly_workable_hours=daily_total,
-        capacity_source=CapacitySource.DAILY_HOURS,
-        source_row=person.source_row,
-    )
-
-
 def _is_total_hours_header(value: object) -> bool:
     if value is None:
         return False
@@ -326,15 +351,6 @@ def _is_total_hours_header(value: object) -> bool:
         "horas total",
         "total hours",
     }
-
-
-def _is_valid_workable_hour_value(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-        and value >= 0
-    )
 
 
 def _decimal_number(value: str) -> float:

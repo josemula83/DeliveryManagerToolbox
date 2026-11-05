@@ -105,12 +105,21 @@ def resolve_management_person_in_sheet(
             method = ManagementPersonMatchingMethod.AMBIGUOUS_NORMALIZED_NAME
 
     capacity = None
+    work_calendar = None
     if matched is not None:
         matched_id = normalize_identifier(matched.employee_id)
         capacity = next(
             (
                 item
                 for item in analysis.person_monthly_capacities
+                if normalize_identifier(item.employee_id) == matched_id
+            ),
+            None,
+        )
+        work_calendar = next(
+            (
+                item
+                for item in analysis.manager_work_calendars
                 if normalize_identifier(item.employee_id) == matched_id
             ),
             None,
@@ -124,6 +133,11 @@ def resolve_management_person_in_sheet(
         matching_method=method,
         monthly_workable_hours=(capacity.monthly_workable_hours if capacity is not None else None),
         capacity_source=(capacity.capacity_source if capacity is not None else None),
+        theoretical_monthly_hours=(
+            capacity.theoretical_monthly_hours if capacity is not None else None
+        ),
+        absence_hours=(capacity.absence_hours if capacity is not None else None),
+        work_calendar=work_calendar,
     )
 
 

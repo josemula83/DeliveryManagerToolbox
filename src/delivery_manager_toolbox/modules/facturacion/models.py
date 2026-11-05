@@ -65,6 +65,7 @@ class Person:
 class CapacitySource(StrEnum):
     PERSON_TOTAL_HOURS = "PERSON_TOTAL_HOURS"
     DAILY_HOURS = "DAILY_HOURS"
+    THEORETICAL_CALENDAR = "THEORETICAL_CALENDAR"
 
 
 class ManagementPersonMatchingMethod(StrEnum):
@@ -81,6 +82,31 @@ class PersonMonthlyWorkCapacity:
     monthly_workable_hours: float
     capacity_source: CapacitySource
     source_row: int | None = None
+    theoretical_monthly_hours: float = 0.0
+    absence_hours: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class WorkCalendarDay:
+    day: int
+    date_label: str
+    weekday_name: str
+    theoretical_hours: float
+    absence_code: str | None
+    capacity_hours: float
+
+
+@dataclass(frozen=True, slots=True)
+class ManagerWorkCalendar:
+    employee_id: str
+    manager_name: str
+    sheet_name: str
+    year: int
+    month: int
+    daily_capacity: tuple[WorkCalendarDay, ...]
+    theoretical_monthly_hours: float
+    absence_hours: float
+    monthly_workable_hours: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +119,9 @@ class ManagementPersonResolution:
     matching_method: ManagementPersonMatchingMethod
     monthly_workable_hours: float | None
     capacity_source: CapacitySource | None
+    theoretical_monthly_hours: float | None = None
+    absence_hours: float | None = None
+    work_calendar: ManagerWorkCalendar | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +194,9 @@ class SheetAnalysis:
     raw_rows: tuple[tuple[object, ...], ...]
     scanned_rows: int
     person_monthly_capacities: tuple[PersonMonthlyWorkCapacity, ...] = ()
+    period_year: int | None = None
+    period_month: int | None = None
+    manager_work_calendars: tuple[ManagerWorkCalendar, ...] = ()
 
     @property
     def person_summaries(self) -> tuple[PersonSummary, ...]:
@@ -311,6 +343,7 @@ class AllocationStatus(StrEnum):
     ABOVE_TARGET_DUE_TO_OVERFLOW = "ABOVE_TARGET_DUE_TO_OVERFLOW"
     BELOW_TARGET = "BELOW_TARGET"
     CAPACITY_DATA_MISSING = "CAPACITY_DATA_MISSING"
+    MANAGER_NOT_FOUND_IN_SHEET = "MANAGER_NOT_FOUND_IN_SHEET"
 
 
 class RateSource(StrEnum):

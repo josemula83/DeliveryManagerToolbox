@@ -33,20 +33,17 @@ from delivery_manager_toolbox.modules.facturacion.models import (
 )
 
 
-def workbook_with_capacities(
-    november_total: float | None = 181,
-    december_total: float | None = 160,
-) -> bytes:
+def workbook_with_capacities() -> bytes:
     workbook = Workbook()
-    for index, (sheet_name, total) in enumerate((
-        ("Horas servicio noviembre", november_total),
-        ("Horas servicio diciembre", december_total),
+    for index, sheet_name in enumerate((
+        "Horas servicio noviembre",
+        "Horas servicio diciembre",
     )):
         worksheet = workbook.active if index == 0 else workbook.create_sheet()
         worksheet.title = sheet_name
         worksheet.append([None, None, 1, 2, 3, "Horas"])
-        worksheet.append([1001, "Daniel Alarcón Guerrero", 9, "V", 7, total])
-        worksheet.append([2001, "Persona Normal", 9, 9, 7, total])
+        worksheet.append([1001, "Daniel Alarcón Guerrero", None, None, None, None])
+        worksheet.append([2001, "Persona Normal", None, None, None, None])
         worksheet.append([None, "Cliente > Servicio A > EXT-A - Tarifa 26 EUR", 10, 10, None, 20])
     output = BytesIO()
     workbook.save(output)
@@ -196,13 +193,15 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         self.november = parse_hierarchical_worksheet(
             self.contents,
             "Horas servicio noviembre",
+            filename="2026-11-Grupos_propios_BBVA.xlsx",
         )
         self.december = parse_hierarchical_worksheet(
             self.contents,
             "Horas servicio diciembre",
+            filename="2026-11-Grupos_propios_BBVA.xlsx",
         )
 
-    def test_person_total_hours_has_priority_and_is_not_counted_as_account_daily_hours(self) -> None:
+    def test_theoretical_calendar_does_not_use_account_hours(self) -> None:
         capacity = next(
             item for item in self.november.person_monthly_capacities
             if item.person_name == "Daniel Alarcón Guerrero"
@@ -210,7 +209,9 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         account = next(item for item in self.november.assignments if item.account_code == "EXT-A")
 
         self.assertEqual(capacity.monthly_workable_hours, 181)
-        self.assertEqual(capacity.capacity_source, CapacitySource.PERSON_TOTAL_HOURS)
+        self.assertEqual(capacity.theoretical_monthly_hours, 181)
+        self.assertEqual(capacity.absence_hours, 0)
+        self.assertEqual(capacity.capacity_source, CapacitySource.THEORETICAL_CALENDAR)
         self.assertEqual(account.total_hours, 20)
 
     def test_daniel_capacity_is_181_at_one_hundred_percent(self) -> None:
@@ -218,6 +219,49 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
 
         self.assertEqual(target.monthly_workable_hours, 181)
         self.assertEqual(target.base_target_hours, 181)
+
+    def test_all_four_managers_use_the_same_generated_calendar(self) -> None:
+        managers = (
+            (1001, "Daniel Alarcón Guerrero", 100),
+            (1002, "Jose Antonio Ferrandez Mula", 50),
+            (1003, "Pedro Miguel Franco Sarabia", 100),
+            (1004, "Rafael Juan Guerra", 100),
+        )
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Horas servicio noviembre"
+        worksheet.append([None, None, 1, 2, 3])
+        for employee_id, name, _ in managers:
+            worksheet.append([employee_id, name, None, None, None])
+        output = BytesIO()
+        workbook.save(output)
+        workbook.close()
+        parsed = parse_hierarchical_worksheet(
+            output.getvalue(),
+            "Horas servicio noviembre",
+            filename="2026-11-Grupos_propios_BBVA.xlsx",
+        )
+        config = BillingConfiguration()
+        for _, name, percentage in managers:
+            config = add_management_person(config, name, percentage)
+
+        targets = {
+            item.manager_name: item
+            for item in calculate_manager_targets(991.5, parsed, config)
+        }
+
+        self.assertEqual(
+            {name: targets[name].monthly_workable_hours for _, name, _ in managers},
+            {name: 181 for _, name, _ in managers},
+        )
+        self.assertEqual(targets["Daniel Alarcón Guerrero"].base_target_hours, 181)
+        self.assertEqual(targets["Jose Antonio Ferrandez Mula"].base_target_hours, 90.5)
+        self.assertEqual(targets["Pedro Miguel Franco Sarabia"].base_target_hours, 181)
+        self.assertEqual(targets["Rafael Juan Guerra"].base_target_hours, 181)
+        self.assertTrue(all(
+            item.resolution.absence_hours == 0
+            for item in targets.values()
+        ))
 
     def test_percentages_apply_to_monthly_workable_hours(self) -> None:
         half = calculate_manager_targets(999, self.november, manager_configuration(50))[0]
@@ -241,34 +285,44 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
         december = calculate_manager_targets(100, self.december, config)[0]
 
         self.assertEqual(november.base_target_hours, 181)
-        self.assertEqual(december.base_target_hours, 160)
+        self.assertEqual(december.base_target_hours, 199)
 
-    def test_daily_fallback_ignores_absence_codes(self) -> None:
+    def test_absence_codes_are_subtracted_from_theoretical_calendar(self) -> None:
         workbook = Workbook()
         worksheet = workbook.active
-        worksheet.title = "Mes"
+        worksheet.title = "Horas servicio noviembre"
         worksheet.append([None, None, 1, 2, 3, 4, 5])
         worksheet.append([1001, "Daniel Alarcón Guerrero", 9, "Vacaciones", 7, "F", "Enfermedad"])
         output = BytesIO()
         workbook.save(output)
         workbook.close()
 
-        parsed = parse_hierarchical_worksheet(output.getvalue(), "Mes")
+        parsed = parse_hierarchical_worksheet(
+            output.getvalue(),
+            "Horas servicio noviembre",
+            filename="2026-11-Grupos_propios_BBVA.xlsx",
+        )
         capacity = parsed.person_monthly_capacities[0]
 
-        self.assertEqual(capacity.monthly_workable_hours, 16)
-        self.assertEqual(capacity.capacity_source, CapacitySource.DAILY_HOURS)
+        self.assertEqual(capacity.theoretical_monthly_hours, 181)
+        self.assertEqual(capacity.absence_hours, 27)
+        self.assertEqual(capacity.monthly_workable_hours, 154)
+        self.assertEqual(capacity.capacity_source, CapacitySource.THEORETICAL_CALENDAR)
 
-    def test_missing_capacity_generates_manager_incident(self) -> None:
+    def test_empty_person_header_still_gets_theoretical_capacity(self) -> None:
         workbook = Workbook()
         worksheet = workbook.active
-        worksheet.title = "Mes"
+        worksheet.title = "Horas servicio noviembre"
         worksheet.append([None, None, 1, 2, "Horas"])
-        worksheet.append([1001, "Daniel Alarcón Guerrero", "V", "F", None])
+        worksheet.append([1001, "Daniel Alarcón Guerrero", None, None, None])
         output = BytesIO()
         workbook.save(output)
         workbook.close()
-        parsed = parse_hierarchical_worksheet(output.getvalue(), "Mes")
+        parsed = parse_hierarchical_worksheet(
+            output.getvalue(),
+            "Horas servicio noviembre",
+            filename="2026-11-Grupos_propios_BBVA.xlsx",
+        )
 
         result = calculate_management_allocation(
             parsed,
@@ -276,12 +330,9 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
             manager_configuration(100),
         )
 
-        self.assertEqual(result.manager_summaries[0].status, AllocationStatus.CAPACITY_DATA_MISSING)
-        self.assertEqual(result.allocation_status, AllocationStatus.CAPACITY_DATA_MISSING)
-        self.assertEqual(result.assignments, ())
-        self.assertEqual(result.total_assigned_hours, 0)
-        self.assertEqual(result.allocation_difference, -5)
-        self.assertTrue(any("MANAGER_MONTHLY_CAPACITY_NOT_FOUND" in item for item in result.incidents))
+        self.assertEqual(result.manager_summaries[0].monthly_workable_hours, 181)
+        self.assertEqual(result.total_assigned_hours, 5)
+        self.assertEqual(result.allocation_difference, 0)
 
     def test_absent_manager_blocks_allocation_and_rate_optimization(self) -> None:
         config = add_management_person(BillingConfiguration(), "Gestor Ausente", 100)
@@ -291,11 +342,11 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
 
         self.assertEqual(
             allocated.allocation_result.allocation_status,
-            AllocationStatus.CAPACITY_DATA_MISSING,
+            AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET,
         )
         self.assertEqual(allocated.allocation_result.assignments, ())
         self.assertTrue(any(
-            "MANAGER_NOT_FOUND_IN_ACTIVE_SHEET" in item
+            "MANAGER_NOT_FOUND_IN_SHEET" in item
             for item in allocated.allocation_result.incidents
         ))
         self.assertIsNone(optimized.rate_optimization_result)
