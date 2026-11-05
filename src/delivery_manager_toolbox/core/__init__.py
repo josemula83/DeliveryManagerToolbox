@@ -1,0 +1,2 @@
+"""Infraestructura y contratos compartidos."""
+

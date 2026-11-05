@@ -1,0 +1,8 @@
+[application]
+name = "Delivery Manager Toolbox"
+subtitle = "Automatización modular para Delivery Management"
+
+[logging]
+level = "INFO"
+file = "logs/delivery-manager-toolbox.log"
+

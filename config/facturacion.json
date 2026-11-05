@@ -1,0 +1,89 @@
+{
+  "schema_version": 3,
+  "management_people": [
+    {
+      "name": "Jose Antonio Ferrandez Mula",
+      "free_capacity_percentage": 50.0
+    },
+    {
+      "name": "Pedro Miguel Franco Sarabia",
+      "free_capacity_percentage": 100.0
+    },
+    {
+      "name": "Rafael Juan Guerra",
+      "free_capacity_percentage": 100.0
+    },
+    {
+      "name": "Daniel Alarcón Guerrero",
+      "free_capacity_percentage": 100.0
+    }
+  ],
+  "no_management_accounts": [
+    "EXT-300690-00224",
+    "EXT-300690-00225"
+  ],
+  "fixed_management_accounts": [
+    {
+      "account": "EXT-300690-00223",
+      "fixed_hours": 100.0
+    }
+  ],
+  "management_rate_blocks": [
+    {
+      "name": "Cuentas HAro",
+      "accounts": [
+        "EXT-300690-00212",
+        "EXT-300690-00161",
+        "EXT-300716-00014",
+        "EXT-300689-00268",
+        "EXT-300690-00243",
+        "EXT-301962-00065",
+        "EXT-305725-00026",
+        "EXT-300689-00201",
+        "EXT-300690-00129",
+        "EXT-300689-00234",
+        "EXT-300690-00232",
+        "EXT-300689-00148",
+        "EXT-300689-00267",
+        "EXT-301962-00070",
+        "EXT-300690-00242",
+        "EXT-300690-00172"
+      ],
+      "management_rate": 17.0
+    },
+    {
+      "name": "Resto cuentas",
+      "accounts": [
+        "EXT-300690-00222",
+        "EXT-300692-00385",
+        "EXT-300690-00218",
+        "EXT-300690-00228",
+        "EXT-300690-00226",
+        "EXT-300692-00380",
+        "EXT-300690-00227",
+        "EXT-300692-00404",
+        "EXT-300690-00216",
+        "EXT-300692-00378",
+        "EXT-300690-00219",
+        "EXT-300692-00382",
+        "EXT-300690-00223",
+        "EXT-300692-00406"
+      ],
+      "management_rate": 18.0
+    }
+  ],
+  "management_person_account_exceptions": [
+    {
+      "employee_id": "105275",
+      "person_name": "Jose Antonio Ferrandez Mula",
+      "account_code": "EXT-300690-00222"
+    }
+  ],
+  "source_sheet": "Horas servicio noviembre",
+  "column_mapping": {
+    "person": "Columna 2",
+    "account": null,
+    "hours": "Horas",
+    "rate": null
+  }
+}

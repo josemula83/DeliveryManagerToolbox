@@ -1,0 +1,291 @@
+"""Contratos de datos del módulo de Facturación."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+
+@dataclass(frozen=True, slots=True)
+class WorksheetInfo:
+    name: str
+    approximate_records: int
+    columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnMapping:
+    """Mapeo legado reservado para posibles formatos planos futuros."""
+
+    person: str | None = None
+    account: str | None = None
+    hours: str | None = None
+    rate: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkbookAnalysis:
+    """Metadatos globales del fichero; no contiene datos calculables de varios meses."""
+
+    filename: str
+    worksheets: tuple[WorksheetInfo, ...]
+    suggested_sheet: str | None = None
+    suggested_mapping: ColumnMapping = ColumnMapping()
+
+    @property
+    def sheet_count(self) -> int:
+        return len(self.worksheets)
+
+    @property
+    def sheet_names(self) -> tuple[str, ...]:
+        return tuple(worksheet.name for worksheet in self.worksheets)
+
+    @property
+    def approximate_records(self) -> int:
+        return sum(worksheet.approximate_records for worksheet in self.worksheets)
+
+    def worksheet(self, name: str) -> WorksheetInfo:
+        for worksheet in self.worksheets:
+            if worksheet.name == name:
+                return worksheet
+        raise KeyError(f"No existe la hoja: {name}")
+
+
+# Alias temporal para consumidores anteriores a la separación explícita workbook/hoja.
+WorkbookInfo = WorkbookAnalysis
+
+
+@dataclass(frozen=True, slots=True)
+class Person:
+    employee_id: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class DailyHours:
+    day: object
+    hours: float
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedAccountDescription:
+    account_code: str | None
+    service_name: str
+    rate: float | None
+    account_type: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AccountAssignment:
+    person: Person
+    account_code: str | None
+    service_name: str
+    rate: float | None
+    original_description: str
+    account_type: str | None
+    daily_hours: tuple[DailyHours, ...] = ()
+
+    @property
+    def total_hours(self) -> float:
+        return sum(item.hours for item in self.daily_hours)
+
+
+@dataclass(frozen=True, slots=True)
+class PersonSummary:
+    employee_id: str
+    name: str
+    account_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class AccountCatalogItem:
+    account_code: str
+    service_name: str
+    original_description: str
+    rates: tuple[float, ...]
+
+    @property
+    def display_name(self) -> str:
+        return f"{self.account_code} — {self.service_name}" if self.service_name else self.account_code
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedHourRecord:
+    employee_id: str
+    person: str
+    account: str | None
+    service: str
+    rate: float | None
+    day: object
+    hours: float
+
+
+@dataclass(frozen=True, slots=True)
+class SheetAnalysis:
+    """Datos normalizados de una sola hoja/período."""
+
+    sheet_name: str
+    people: tuple[Person, ...]
+    assignments: tuple[AccountAssignment, ...]
+    raw_columns: tuple[str, ...]
+    raw_rows: tuple[tuple[object, ...], ...]
+    scanned_rows: int
+
+    @property
+    def person_summaries(self) -> tuple[PersonSummary, ...]:
+        counts = {person.employee_id: 0 for person in self.people}
+        for assignment in self.assignments:
+            counts[assignment.person.employee_id] = counts.get(assignment.person.employee_id, 0) + 1
+        return tuple(PersonSummary(person.employee_id, person.name, counts[person.employee_id]) for person in self.people)
+
+    @property
+    def accounts(self) -> tuple[AccountCatalogItem, ...]:
+        catalog: dict[str, dict[str, object]] = {}
+        for assignment in self.assignments:
+            if assignment.account_code is None:
+                continue
+            item = catalog.setdefault(
+                assignment.account_code,
+                {
+                    "service_name": assignment.service_name,
+                    "original_description": assignment.original_description,
+                    "rates": [],
+                },
+            )
+            rates = item["rates"]
+            if assignment.rate is not None and assignment.rate not in rates:
+                rates.append(assignment.rate)
+        return tuple(
+            AccountCatalogItem(code, str(item["service_name"]), str(item["original_description"]), tuple(item["rates"]))
+            for code, item in catalog.items()
+        )
+
+    @property
+    def rates(self) -> tuple[float, ...]:
+        result: list[float] = []
+        for assignment in self.assignments:
+            if assignment.rate is not None and assignment.rate not in result:
+                result.append(assignment.rate)
+        return tuple(result)
+
+    @property
+    def normalized_hours(self) -> tuple[NormalizedHourRecord, ...]:
+        return tuple(
+            NormalizedHourRecord(
+                assignment.person.employee_id,
+                assignment.person.name,
+                assignment.account_code,
+                assignment.service_name,
+                assignment.rate,
+                daily.day,
+                daily.hours,
+            )
+            for assignment in self.assignments
+            for daily in assignment.daily_hours
+        )
+
+
+# Alias temporal para compatibilidad con el nombre anterior.
+HierarchicalWorksheetAnalysis = SheetAnalysis
+
+
+@dataclass(frozen=True, slots=True)
+class WorksheetPreview:
+    """Contrato legado para el lector plano avanzado/manual."""
+
+    sheet_name: str
+    columns: tuple[str, ...]
+    sample_rows: tuple[tuple[object, ...], ...]
+    people: tuple[str, ...]
+    accounts: tuple[str, ...]
+    rates: tuple[object, ...]
+    hours: tuple[object, ...]
+    scanned_records: int
+
+
+class CalculationType(StrEnum):
+    NO_MANAGEMENT = "NO_MANAGEMENT"
+    FIXED = "FIXED"
+    PERCENTAGE = "PERCENTAGE"
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentAuditRecord:
+    employee_id: str
+    person_name: str
+    account_code: str
+    service_name: str
+    hours: float
+
+
+@dataclass(frozen=True, slots=True)
+class CleanModelAuditSummary:
+    management_people_detected: int
+    assignments_removed: int
+    hours_removed: float
+    exceptions_preserved: int
+    hours_preserved_by_exception: float
+
+
+@dataclass(frozen=True, slots=True)
+class CleanBillingModel:
+    assignments: tuple[AccountAssignment, ...]
+    removed_assignments: tuple[AssignmentAuditRecord, ...]
+    preserved_exceptions: tuple[AssignmentAuditRecord, ...]
+    audit: CleanModelAuditSummary
+
+
+@dataclass(frozen=True, slots=True)
+class AccountBaseHours:
+    account_code: str
+    service_name: str
+    base_hours: float
+
+
+@dataclass(frozen=True, slots=True)
+class AccountManagementCalculation:
+    account_code: str
+    service_name: str
+    base_hours: float
+    raw_management_hours: float
+    management_hours: float
+    calculation_type: CalculationType
+    percentage_applied: float
+
+
+@dataclass(frozen=True, slots=True)
+class BillingCalculationSummary:
+    total_accounts: int
+    total_base_hours: float
+    total_management_hours: float
+    accounts_without_management: int
+    accounts_with_fixed_management: int
+    accounts_percentage_based: int
+    management_people_detected: int
+    assignments_removed: int
+    hours_removed: float
+    exceptions_preserved: int
+    hours_preserved_by_exception: float
+
+
+@dataclass(frozen=True, slots=True)
+class SheetCalculationResult:
+    """Resultado de la primera fase asociado inequívocamente a un período."""
+
+    sheet_name: str
+    summary: BillingCalculationSummary
+    account_calculations: tuple[AccountManagementCalculation, ...]
+    clean_model: CleanBillingModel
+    incidents: tuple[str, ...] = ()
+
+    @property
+    def results(self) -> tuple[AccountManagementCalculation, ...]:
+        """Alias de compatibilidad para la interfaz y exportador existentes."""
+        return self.account_calculations
+
+    @property
+    def audit(self) -> CleanModelAuditSummary:
+        return self.clean_model.audit
+
+
+BillingResult = SheetCalculationResult

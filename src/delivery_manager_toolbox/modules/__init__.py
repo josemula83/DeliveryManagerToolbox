@@ -1,0 +1,2 @@
+"""Módulos funcionales autodetectables."""
+
