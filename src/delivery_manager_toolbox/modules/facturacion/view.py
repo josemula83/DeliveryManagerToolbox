@@ -1129,7 +1129,7 @@ def _render_management_allocation(
         {
             "Gestor": item.manager_name,
             "Capacidad %": item.capacity_percentage,
-            "Base mensual legacy": item.monthly_workable_hours,
+            "Horas laborables mes": item.monthly_workable_hours,
             "Objetivo base": item.base_target_hours,
             "Horas gestión asignadas": item.assigned_hours,
             "Diferencia vs objetivo": item.difference_vs_base_target,
@@ -1145,7 +1145,7 @@ def _render_management_allocation(
         alt="Resumen del reparto de gestión por persona",
         column_config={
             "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
-            "Base mensual legacy": st.column_config.NumberColumn(format="%.2f h"),
+            "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
             "Objetivo base": st.column_config.NumberColumn(format="%.2f h"),
             "Horas gestión asignadas": st.column_config.NumberColumn(format="%.2f h"),
             "Diferencia vs objetivo": st.column_config.NumberColumn(format="%.2f h"),
@@ -1153,11 +1153,31 @@ def _render_management_allocation(
     )
 
     with st.expander("Ver cálculo de capacidad"):
+        resolution_by_manager = {
+            item.configured_manager_name: item
+            for item in allocation.management_person_resolutions
+        }
         capacity_rows = pd.DataFrame([
             {
                 "Gestor": item.manager_name,
-                "Hoja": allocation.sheet_name,
-                "Base mensual legacy": item.monthly_workable_hours,
+                "Periodo": (
+                    f"{resolution_by_manager[item.manager_name].work_calendar.year:04d}-"
+                    f"{resolution_by_manager[item.manager_name].work_calendar.month:02d}"
+                    if resolution_by_manager.get(item.manager_name) is not None
+                    and resolution_by_manager[item.manager_name].work_calendar is not None
+                    else allocation.sheet_name
+                ),
+                "Horas teóricas": (
+                    resolution_by_manager[item.manager_name].theoretical_monthly_hours
+                    if resolution_by_manager.get(item.manager_name) is not None
+                    else None
+                ),
+                "Horas descontadas por ausencias": (
+                    resolution_by_manager[item.manager_name].absence_hours
+                    if resolution_by_manager.get(item.manager_name) is not None
+                    else None
+                ),
+                "Horas laborables mes": item.monthly_workable_hours,
                 "Capacidad %": item.capacity_percentage,
                 "Objetivo base": item.base_target_hours,
                 "Origen": (
@@ -1172,7 +1192,9 @@ def _render_management_allocation(
             width="stretch",
             alt="Origen y cálculo del objetivo base mensual por gestor",
             column_config={
-                "Base mensual legacy": st.column_config.NumberColumn(format="%.2f h"),
+                "Horas teóricas": st.column_config.NumberColumn(format="%.2f h"),
+                "Horas descontadas por ausencias": st.column_config.NumberColumn(format="%.2f h"),
+                "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
                 "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
                 "Objetivo base": st.column_config.NumberColumn(format="%.2f h"),
             },

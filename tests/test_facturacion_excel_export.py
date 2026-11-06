@@ -57,8 +57,16 @@ def _fill_month_sheet(worksheet, rate: float | None, daily_hours: float, *, incl
 
 
 def configured_results(contents: bytes):
-    november = parse_hierarchical_worksheet(contents, NOVEMBER)
-    december = parse_hierarchical_worksheet(contents, DECEMBER)
+    november = parse_hierarchical_worksheet(
+        contents,
+        NOVEMBER,
+        filename="2026-11-Grupos_propios_BBVA.xlsx",
+    )
+    december = parse_hierarchical_worksheet(
+        contents,
+        DECEMBER,
+        filename="2026-11-Grupos_propios_BBVA.xlsx",
+    )
     configuration = add_management_person(
         BillingConfiguration(), "Gestor Principal", 20, "2001"
     )
@@ -135,8 +143,8 @@ class BillingExcelExportTests(unittest.TestCase):
             self.assertEqual(sum(item["management"] for item in november_rows), 6)
             self.assertEqual(sum(item["management"] for item in december_rows), 6)
             self.assertEqual({item["rate"] for item in november_rows if item["account"] == "EXT-A"}, {17})
-            self.assertEqual({item["rate"] for item in december_rows}, {45})
-            self.assertEqual(sum(item["billable"] for item in december_rows), 2.4)
+            self.assertEqual({item["rate"] for item in december_rows}, {18})
+            self.assertEqual(sum(item["billable"] for item in december_rows), 6)
         finally:
             workbook.close()
         self.assertEqual(len(artifact.validations), 2)
@@ -212,6 +220,22 @@ class BillingExcelExportTests(unittest.TestCase):
                 keys = [(item["manager"], item["account"]) for item in rows]
                 self.assertEqual(len(keys), len(set(keys)))
                 self.assertTrue(all(item["fill"] not in {None, "00000000"} for item in rows))
+        finally:
+            workbook.close()
+
+    def test_manager_summary_uses_resolved_calendar_capacity(self) -> None:
+        artifact = export_billing_workbook(
+            self.contents, "meses.xlsx", self.workbook_result.results_by_sheet
+        )
+        workbook = load_workbook(BytesIO(artifact.contents))
+        try:
+            for sheet_name, expected_capacity in ((NOVEMBER, 181), (DECEMBER, 199)):
+                worksheet = workbook[sheet_name]
+                title_row = next(
+                    cell.row for cell in worksheet["A"] if cell.value == "RESUMEN GESTORES"
+                )
+                self.assertEqual(worksheet.cell(title_row + 1, 1).value, "Gestor Principal")
+                self.assertEqual(worksheet.cell(title_row + 1, 4).value, expected_capacity)
         finally:
             workbook.close()
 

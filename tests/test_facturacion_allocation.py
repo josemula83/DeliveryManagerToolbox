@@ -74,7 +74,7 @@ def analysis(
             employee_id=manager.employee_id,
             person_name=manager.name,
             monthly_workable_hours=monthly_hours,
-            capacity_source=CapacitySource.PERSON_TOTAL_HOURS,
+            capacity_source=CapacitySource.THEORETICAL_CALENDAR,
         )
         for manager in managers
     )
@@ -110,7 +110,7 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 100), ("Bea", 100)),
         )
 
-        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [100, 100])
+        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [181, 181])
         self.assertEqual([item.assigned_hours for item in result.manager_summaries], [10, 10])
 
     def test_percentages_apply_to_each_manager_monthly_hours(self) -> None:
@@ -121,7 +121,7 @@ class ManagerAllocationTests(unittest.TestCase):
             configuration(("Ana", 50), ("Bea", 100)),
         )
 
-        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [50, 100])
+        self.assertEqual([item.base_target_hours for item in result.manager_summaries], [90.5, 181])
         self.assertEqual([item.assigned_hours for item in result.manager_summaries], [10, 20])
 
     def test_four_manager_capacities_do_not_depend_on_total_management(self) -> None:
@@ -133,10 +133,10 @@ class ManagerAllocationTests(unittest.TestCase):
         )
 
         by_name = {item.manager_name: item.base_target_hours for item in targets}
-        self.assertEqual(by_name["Jose"], 50)
-        self.assertEqual(by_name["Pedro"], 100)
-        self.assertEqual(by_name["Rafael"], 100)
-        self.assertEqual(by_name["Daniel"], 100)
+        self.assertEqual(by_name["Jose"], 90.5)
+        self.assertEqual(by_name["Pedro"], 181)
+        self.assertEqual(by_name["Rafael"], 181)
+        self.assertEqual(by_name["Daniel"], 181)
 
     def test_total_is_exact_and_every_assignment_uses_half_hour_steps(self) -> None:
         source = analysis("Noviembre", "Ana", "Bea", "Carla")
@@ -227,7 +227,7 @@ class ManagerAllocationTests(unittest.TestCase):
         self.assertTrue(all(item.sheet_name == "Diciembre" for item in december.allocation_result.assignments))
 
     def test_largest_remainder_assigns_single_half_hour_deterministically(self) -> None:
-        source = analysis("Noviembre", "Ana", "Bea", monthly_hours=0)
+        source = analysis("Noviembre", "Ana", "Bea", monthly_hours=1)
         result = calculate_management_allocation(
             source,
             (calculation("EXT-1", 0.5),),

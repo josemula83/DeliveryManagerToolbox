@@ -1,3 +1,4 @@
+from dataclasses import replace
 import unittest
 
 from delivery_manager_toolbox.modules.facturacion.allocation import (
@@ -15,6 +16,7 @@ from delivery_manager_toolbox.modules.facturacion.models import (
     CapacitySource,
     DailyHours,
     Person,
+    PersonMonthlyWorkCapacity,
     SheetAnalysis,
 )
 
@@ -50,8 +52,25 @@ def configuration(*records: tuple[str, float]) -> BillingConfiguration:
     return result
 
 
+def with_calendar_capacities(
+    source: SheetAnalysis,
+    capacities_by_name: dict[str, float],
+) -> SheetAnalysis:
+    capacities = tuple(
+        PersonMonthlyWorkCapacity(
+            employee_id=person.employee_id,
+            person_name=person.name,
+            monthly_workable_hours=capacities_by_name[person.name],
+            capacity_source=CapacitySource.THEORETICAL_CALENDAR,
+        )
+        for person in source.people
+        if person.name in capacities_by_name
+    )
+    return replace(source, person_monthly_capacities=capacities)
+
+
 class LegacyAllocationRegressionTests(unittest.TestCase):
-    def test_month_base_uses_own_service_hours_or_sheet_maximum(self) -> None:
+    def test_month_base_uses_calendar_and_ignores_service_hours(self) -> None:
         ana = Person("M-1", "Ana")
         bea = Person("M-2", "Bea")
         normal = Person("N-1", "Persona Normal")
@@ -67,18 +86,19 @@ class LegacyAllocationRegressionTests(unittest.TestCase):
             2,
         )
 
+        source = with_calendar_capacities(source, {"Ana": 181, "Bea": 138})
         targets = calculate_manager_targets(
             999,
             source,
             configuration(("Ana", 100), ("Bea", 100)),
         )
 
-        self.assertEqual([item.monthly_workable_hours for item in targets], [100, 200])
+        self.assertEqual([item.monthly_workable_hours for item in targets], [181, 138])
         self.assertEqual(
             [item.capacity_source for item in targets],
             [
-                CapacitySource.LEGACY_RECORDED_HOURS,
-                CapacitySource.LEGACY_REFERENCE_HOURS,
+                CapacitySource.THEORETICAL_CALENDAR,
+                CapacitySource.THEORETICAL_CALENDAR,
             ],
         )
 
@@ -99,6 +119,10 @@ class LegacyAllocationRegressionTests(unittest.TestCase):
             (),
             (),
             4,
+        )
+        source = with_calendar_capacities(
+            source,
+            {person.name: 181 for person in managers},
         )
         config = configuration(
             ("Daniel", 100),
@@ -136,6 +160,7 @@ class LegacyAllocationRegressionTests(unittest.TestCase):
             (),
             2,
         )
+        source = with_calendar_capacities(source, {"Ana": 100, "Bea": 100})
 
         result = calculate_management_allocation(
             source,
@@ -159,6 +184,7 @@ class LegacyAllocationRegressionTests(unittest.TestCase):
             (),
             2,
         )
+        source = with_calendar_capacities(source, {"Ana": 100, "Bea": 100})
 
         result = calculate_management_allocation(
             source,

@@ -2,6 +2,8 @@
 
 Fuente de verdad: `legacy/facturacion_anterior.html`, marcador **Facturación BBVA - V1.3**. El atributo `HREF` contiene un programa JavaScript codificado en Base64. Las referencias siguientes son los nombres de sus funciones una vez decodificado.
 
+La capacidad mensual contiene una corrección funcional posterior: las horas imputadas en cuentas no son capacidad laboral. Los pasos 4 y 8 describen el comportamiento histórico del HTML, pero la implementación actual usa el calendario teórico ajustado por ausencias y bloquea gestores sin capacidad resoluble.
+
 ## Flujo real
 
 1. `parseXlsx()` abre el ZIP del XLSX, recorre todas las hojas y detecta personas, servicios, cuentas, tarifas y horas diarias.
@@ -29,7 +31,8 @@ Fuente de verdad: `legacy/facturacion_anterior.html`, marcador **Facturación BB
 | Sin facturación | No genera gestión | Cuenta sin gestión | Coincide | Bajo |
 | Gestión fija | Valor libre, normalizado hacia abajo a 0,5 h; mínimo 0,5 si es positivo | Configuración validada en 0,5 h | Coincide para configuraciones válidas | Un JSON legacy puede contener cuartos de hora |
 | Gestión porcentual | 5 %, redondeo inferior a 0,5 h, mínimo 0,5 | Misma regla | Coincide | Bajo |
-| Base mensual gestor | Horas de servicio propias; si son cero o no existen, máximo de la hoja | Antes usaba calendario teórico | Corregido a legacy | Bajo |
+| Base mensual gestor | Horas de servicio propias o máximo de la hoja | Calendario teórico menos ausencias | Corregido por regla funcional | Bajo |
+| Gestor ausente | Usa el máximo de otra persona | Bloquea con `MANAGER_NOT_FOUND_IN_SHEET` | Corregido por regla funcional | Bajo |
 | Porcentaje | Objetivo usado como peso relativo | Antes se trataba como objetivo absoluto | Corregido a legacy | Bajo |
 | Cuota | Mayores restos en unidades de 0,5 h | Antes repartía excedente igualitario | Corregido a legacy | Bajo |
 | Orden gestores | Nombre, locale español, sin distinguir acentos | Nombre normalizado | Equivalente para los nombres actuales | Casos raros de colación española |
@@ -54,7 +57,8 @@ Fuente de verdad: `legacy/facturacion_anterior.html`, marcador **Facturación BB
 
 ## Casos de regresión portados
 
-- La base mensual procede de horas de servicio propias y usa el máximo de la hoja como respaldo.
+- La base mensual procede del calendario laboral individual y no cambia al variar horas de cuenta.
+- Un gestor ausente o sin calendario bloquea el reparto sin capacidad inventada.
 - Cuatro objetivos 181/90,5/181/181 y 991,5 h producen cuotas 283,5/141,5/283,5/283 h.
 - Los mayores restos trabajan en unidades exactas de 0,5 h y desempatan por orden de gestor.
 - Una cuenta se divide en el límite de cuota; no se aplica tolerancia para conservarla completa.
