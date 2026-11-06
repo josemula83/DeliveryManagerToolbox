@@ -22,6 +22,7 @@ from delivery_manager_toolbox.modules.facturacion.excel_export import (
 from delivery_manager_toolbox.modules.facturacion.excel_reader import (
     parse_hierarchical_worksheet,
 )
+from delivery_manager_toolbox.modules.facturacion.models import CapacitySource
 
 
 NOVEMBER = "Horas servicio noviembre"
@@ -238,6 +239,41 @@ class BillingExcelExportTests(unittest.TestCase):
                 self.assertEqual(worksheet.cell(title_row + 1, 4).value, expected_capacity)
         finally:
             workbook.close()
+
+    def test_absent_manager_with_peer_capacity_is_exported(self) -> None:
+        configuration = add_management_person(
+            self.configuration, "Gestor Ausente", 100, "3001"
+        )
+        result = calculate_sheet_management(self.november, configuration)
+        result = calculate_sheet_rate_optimization(result, self.november, configuration)
+
+        artifact = export_billing_workbook(
+            self.contents,
+            "meses.xlsx",
+            {NOVEMBER: result},
+        )
+        workbook = load_workbook(BytesIO(artifact.contents))
+        try:
+            rows = management_rows(workbook[NOVEMBER])
+        finally:
+            workbook.close()
+
+        absent_rows = [item for item in rows if item["manager"] == "Gestor Ausente"]
+        self.assertTrue(absent_rows)
+        self.assertEqual({item["employee_id"] for item in absent_rows}, {"3001"})
+        summary = next(
+            item
+            for item in result.allocation_result.manager_summaries
+            if item.manager_name == "Gestor Ausente"
+        )
+        self.assertEqual(summary.capacity_source, CapacitySource.PEER_MONTHLY_AVERAGE)
+        self.assertIsNotNone(result.rate_optimization_result)
+        expected_hours = sum(
+            item.management_hours
+            for item in result.rate_optimization_result.assignments
+            if item.manager_name == "Gestor Ausente"
+        )
+        self.assertEqual(sum(item["management"] for item in absent_rows), expected_hours)
 
     def test_generated_file_reopens_and_original_bytes_do_not_change(self) -> None:
         original = bytes(self.contents)

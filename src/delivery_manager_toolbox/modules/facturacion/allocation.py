@@ -14,14 +14,19 @@ from delivery_manager_toolbox.modules.facturacion.configuration import (
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountManagementCalculation,
     AllocationStatus,
+    CapacitySource,
     ManagementAllocationResult,
     ManagementAssignment,
+    ManagementPersonResolution,
     ManagerAllocationSummary,
     ManagerTarget,
     SheetAnalysis,
 )
 from delivery_manager_toolbox.modules.facturacion.validation import normalize_identifier
-from delivery_manager_toolbox.modules.facturacion.work_calendar import calculate_manager_base_target
+from delivery_manager_toolbox.modules.facturacion.work_calendar import (
+    calculate_manager_base_target,
+    floor_to_half_hour,
+)
 
 
 ALLOCATION_STEP = 0.5
@@ -42,15 +47,37 @@ def calculate_manager_targets(
         normalize_identifier(item.configured_manager_name): item
         for item in resolve_management_people_in_sheet(configuration, analysis)
     }
+    resolved = tuple(
+        (item, resolutions[normalize_identifier(item.name)])
+        for item in configured
+    )
+    real_capacities = tuple(
+        resolution.monthly_workable_hours
+        for _, resolution in resolved
+        if _has_valid_calendar_capacity(resolution)
+    )
+    peer_average = (
+        floor_to_half_hour(sum(real_capacities) / len(real_capacities))
+        if real_capacities
+        else None
+    )
+
     targets: list[ManagerTarget] = []
-    for item in configured:
-        resolution = resolutions[normalize_identifier(item.name)]
+    for item, resolution in resolved:
         employee_id = (
             resolution.matched_employee_id
             or resolution.configured_employee_id
             or item.name
         )
-        monthly_workable_hours = resolution.monthly_workable_hours
+        if _has_valid_calendar_capacity(resolution):
+            monthly_workable_hours = resolution.monthly_workable_hours
+            capacity_source = CapacitySource.THEORETICAL_CALENDAR
+        elif resolution.matched_employee_id is None and peer_average is not None:
+            monthly_workable_hours = peer_average
+            capacity_source = CapacitySource.PEER_MONTHLY_AVERAGE
+        else:
+            monthly_workable_hours = None
+            capacity_source = None
         base_target_hours = (
             calculate_manager_base_target(
                 monthly_workable_hours,
@@ -65,7 +92,7 @@ def calculate_manager_targets(
             capacity_percentage=item.free_capacity_percentage,
             base_target_hours=base_target_hours,
             monthly_workable_hours=monthly_workable_hours,
-            capacity_source=resolution.capacity_source,
+            capacity_source=capacity_source,
             resolution=resolution,
         ))
     return tuple(targets)
@@ -181,8 +208,10 @@ def build_manager_summary(
             if target.base_target_hours > _FLOAT_TOLERANCE
             else 0.0
         )
-        if target.resolution is not None and target.resolution.matched_employee_id is None:
-            status = AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET
+        if target.monthly_workable_hours is None and (
+            target.resolution is None or target.resolution.matched_employee_id is None
+        ):
+            status = AllocationStatus.NO_REFERENCE_MANAGER_CAPACITY
         elif target.monthly_workable_hours is None:
             status = AllocationStatus.CAPACITY_DATA_MISSING
         elif assigned_hours > target.base_target_hours + _FLOAT_TOLERANCE:
@@ -227,9 +256,8 @@ def calculate_management_allocation(
     if missing_targets:
         summaries = build_manager_summary(targets, ())
         incidents = tuple(_missing_capacity_incident(target) for target in missing_targets)
-        missing_manager = any(
-            target.resolution is not None
-            and target.resolution.matched_employee_id is None
+        no_reference_capacity = any(
+            target.resolution is None or target.resolution.matched_employee_id is None
             for target in missing_targets
         )
         return ManagementAllocationResult(
@@ -240,8 +268,8 @@ def calculate_management_allocation(
             total_assigned_hours=0.0,
             allocation_difference=-total_management_hours,
             allocation_status=(
-                AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET
-                if missing_manager
+                AllocationStatus.NO_REFERENCE_MANAGER_CAPACITY
+                if no_reference_capacity
                 else AllocationStatus.CAPACITY_DATA_MISSING
             ),
             split_account_count=0,
@@ -280,7 +308,11 @@ def calculate_management_allocation(
         allocation_difference=allocation_difference,
         allocation_status=status,
         split_account_count=sum(len(managers) > 1 for managers in manager_count_by_account.values()),
-        incidents=(),
+        incidents=tuple(
+            _peer_average_incident(target, analysis.sheet_name)
+            for target in targets
+            if target.capacity_source == CapacitySource.PEER_MONTHLY_AVERAGE
+        ),
         total_base_target_hours=total_base_target,
         overflow_hours=overflow_hours,
         management_person_resolutions=tuple(
@@ -293,12 +325,33 @@ def _missing_capacity_incident(target: ManagerTarget) -> str:
     resolution = target.resolution
     if resolution is None or resolution.matched_employee_id is None:
         return (
-            "MANAGER_NOT_FOUND_IN_SHEET: "
-            f"{target.manager_name}. Gestor no localizado en la hoja activa."
+            "NO_REFERENCE_MANAGER_CAPACITY: "
+            "No existen gestores presentes en esta hoja con capacidad válida para calcular "
+            "la capacidad media de los gestores ausentes."
         )
     return (
         "CAPACITY_DATA_MISSING: "
         f"{target.manager_name}. No se ha podido determinar su calendario laboral mensual."
+    )
+
+
+def _peer_average_incident(target: ManagerTarget, sheet_name: str) -> str:
+    return (
+        "PEER_MONTHLY_AVERAGE: "
+        f"{target.manager_name} no aparece en {sheet_name}. Se ha utilizado una capacidad "
+        f"mensual estimada de {target.monthly_workable_hours:g}h, calculada como la media "
+        "de los gestores presentes."
+    )
+
+
+def _has_valid_calendar_capacity(resolution: ManagementPersonResolution) -> bool:
+    hours = resolution.monthly_workable_hours
+    return (
+        resolution.matched_employee_id is not None
+        and resolution.capacity_source == CapacitySource.THEORETICAL_CALENDAR
+        and hours is not None
+        and math.isfinite(hours)
+        and hours >= 0
     )
 
 

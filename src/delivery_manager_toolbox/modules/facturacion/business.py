@@ -29,6 +29,7 @@ from delivery_manager_toolbox.modules.facturacion.models import (
 )
 from delivery_manager_toolbox.modules.facturacion.validation import normalize_identifier
 from delivery_manager_toolbox.modules.facturacion.rate_optimization import optimize_management_rates
+from delivery_manager_toolbox.modules.facturacion.work_calendar import floor_to_half_hour
 
 
 MANAGEMENT_PERCENTAGE = 5.0
@@ -240,6 +241,7 @@ def calculate_sheet_rate_optimization(
         and result.allocation_result.allocation_status in {
             AllocationStatus.CAPACITY_DATA_MISSING,
             AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET,
+            AllocationStatus.NO_REFERENCE_MANAGER_CAPACITY,
         }
     ):
         return result
@@ -309,7 +311,7 @@ def _round_percentage_management_hours(base_hours: float, raw_hours: float) -> f
         return 0.0
     if raw_hours < _HALF_HOUR:
         return _HALF_HOUR
-    return math.floor((raw_hours + 1e-12) / _HALF_HOUR) * _HALF_HOUR
+    return floor_to_half_hour(raw_hours)
 
 
 def _audit_record(assignment: AccountAssignment) -> AssignmentAuditRecord:

@@ -2,7 +2,7 @@
 
 Fuente de verdad: `legacy/facturacion_anterior.html`, marcador **Facturación BBVA - V1.3**. El atributo `HREF` contiene un programa JavaScript codificado en Base64. Las referencias siguientes son los nombres de sus funciones una vez decodificado.
 
-La capacidad mensual contiene una corrección funcional posterior: las horas imputadas en cuentas no son capacidad laboral. Los pasos 4 y 8 describen el comportamiento histórico del HTML, pero la implementación actual usa el calendario teórico ajustado por ausencias y bloquea gestores sin capacidad resoluble.
+La capacidad mensual contiene correcciones funcionales posteriores: las horas imputadas en cuentas no son capacidad laboral y un gestor configurado ausente usa la media mensual de los gestores configurados presentes con calendario válido. Los pasos 4 y 8 describen el comportamiento histórico del HTML, mientras la implementación actual usa el calendario teórico ajustado por ausencias y bloquea solo cuando no existe una referencia válida o un gestor presente carece de capacidad resoluble.
 
 ## Flujo real
 
@@ -32,7 +32,7 @@ La capacidad mensual contiene una corrección funcional posterior: las horas imp
 | Gestión fija | Valor libre, normalizado hacia abajo a 0,5 h; mínimo 0,5 si es positivo | Configuración validada en 0,5 h | Coincide para configuraciones válidas | Un JSON legacy puede contener cuartos de hora |
 | Gestión porcentual | 5 %, redondeo inferior a 0,5 h, mínimo 0,5 | Misma regla | Coincide | Bajo |
 | Base mensual gestor | Horas de servicio propias o máximo de la hoja | Calendario teórico menos ausencias | Corregido por regla funcional | Bajo |
-| Gestor ausente | Usa el máximo de otra persona | Bloquea con `MANAGER_NOT_FOUND_IN_SHEET` | Corregido por regla funcional | Bajo |
+| Gestor ausente | Usa el máximo de otra persona | Media de `monthly_workable_hours` de gestores configurados presentes, origen `PEER_MONTHLY_AVERAGE` | Corregido por regla funcional | Bajo |
 | Porcentaje | Objetivo usado como peso relativo | Antes se trataba como objetivo absoluto | Corregido a legacy | Bajo |
 | Cuota | Mayores restos en unidades de 0,5 h | Antes repartía excedente igualitario | Corregido a legacy | Bajo |
 | Orden gestores | Nombre, locale español, sin distinguir acentos | Nombre normalizado | Equivalente para los nombres actuales | Casos raros de colación española |
@@ -58,7 +58,8 @@ La capacidad mensual contiene una corrección funcional posterior: las horas imp
 ## Casos de regresión portados
 
 - La base mensual procede del calendario laboral individual y no cambia al variar horas de cuenta.
-- Un gestor ausente o sin calendario bloquea el reparto sin capacidad inventada.
+- Un gestor ausente usa una única media de capacidades reales presentes; varios ausentes no alimentan la media entre sí.
+- La ausencia de gestores configurados presentes con calendario válido bloquea con `NO_REFERENCE_MANAGER_CAPACITY`.
 - Cuatro objetivos 181/90,5/181/181 y 991,5 h producen cuotas 283,5/141,5/283,5/283 h.
 - Los mayores restos trabajan en unidades exactas de 0,5 h y desempatan por orden de gestor.
 - Una cuenta se divide en el límite de cuota; no se aplica tolerancia para conservarla completa.

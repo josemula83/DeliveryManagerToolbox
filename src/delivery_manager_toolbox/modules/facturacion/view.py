@@ -53,6 +53,7 @@ from delivery_manager_toolbox.modules.facturacion.excel_export import (
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountCatalogItem,
     AllocationStatus,
+    CapacitySource,
     CalculationType,
     ManagementAllocationResult,
     Person,
@@ -1084,6 +1085,7 @@ def _render_management_allocation(
     if allocation.allocation_status in {
         AllocationStatus.CAPACITY_DATA_MISSING,
         AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET,
+        AllocationStatus.NO_REFERENCE_MANAGER_CAPACITY,
     }:
         affected = ", ".join(
             item.manager_name
@@ -1091,20 +1093,35 @@ def _render_management_allocation(
             if item.status in {
                 AllocationStatus.CAPACITY_DATA_MISSING,
                 AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET,
+                AllocationStatus.NO_REFERENCE_MANAGER_CAPACITY,
             }
         )
-        st.error(
-            "Reparto bloqueado: hay Personas en Gestión sin jornada mensual resuelta. "
-            f"Revisa la hoja activa y la identidad de: {affected}."
-        )
+        if allocation.allocation_status == AllocationStatus.NO_REFERENCE_MANAGER_CAPACITY:
+            st.error(
+                "No existen gestores presentes en esta hoja con capacidad válida para calcular "
+                "la capacidad media de los gestores ausentes."
+            )
+        else:
+            st.error(
+                "Reparto bloqueado: hay Personas en Gestión sin jornada mensual resuelta. "
+                f"Revisa la hoja activa y la identidad de: {affected}."
+            )
     elif allocation.overflow_hours:
         st.info(
             "La gestión supera los objetivos base en "
             f"{_format_hours(allocation.overflow_hours)}; las cuotas proporcionales legacy "
             "absorben la totalidad."
         )
-    if allocation.incidents:
-        st.warning("\n".join(f"- {incident}" for incident in allocation.incidents))
+    informational_incidents = tuple(
+        item for item in allocation.incidents if item.startswith("PEER_MONTHLY_AVERAGE:")
+    )
+    blocking_incidents = tuple(
+        item for item in allocation.incidents if item not in informational_incidents
+    )
+    if informational_incidents:
+        st.info("\n".join(f"- {incident}" for incident in informational_incidents))
+    if blocking_incidents:
+        st.warning("\n".join(f"- {incident}" for incident in blocking_incidents))
 
     if allocation.management_person_resolutions:
         with st.expander("Auditoría de asociación de Personas en Gestión"):
@@ -1131,6 +1148,7 @@ def _render_management_allocation(
             "Capacidad %": item.capacity_percentage,
             "Horas laborables mes": item.monthly_workable_hours,
             "Objetivo base": item.base_target_hours,
+            "Origen capacidad": _capacity_source_label(item.capacity_source),
             "Horas gestión asignadas": item.assigned_hours,
             "Diferencia vs objetivo": item.difference_vs_base_target,
             "Nº cuentas": item.accounts_assigned,
@@ -1160,6 +1178,10 @@ def _render_management_allocation(
         capacity_rows = pd.DataFrame([
             {
                 "Gestor": item.manager_name,
+                "Presente en hoja": (
+                    resolution_by_manager.get(item.manager_name) is not None
+                    and resolution_by_manager[item.manager_name].matched_employee_id is not None
+                ),
                 "Periodo": (
                     f"{resolution_by_manager[item.manager_name].work_calendar.year:04d}-"
                     f"{resolution_by_manager[item.manager_name].work_calendar.month:02d}"
@@ -1172,7 +1194,7 @@ def _render_management_allocation(
                     if resolution_by_manager.get(item.manager_name) is not None
                     else None
                 ),
-                "Horas descontadas por ausencias": (
+                "Ausencias": (
                     resolution_by_manager[item.manager_name].absence_hours
                     if resolution_by_manager.get(item.manager_name) is not None
                     else None
@@ -1180,9 +1202,7 @@ def _render_management_allocation(
                 "Horas laborables mes": item.monthly_workable_hours,
                 "Capacidad %": item.capacity_percentage,
                 "Objetivo base": item.base_target_hours,
-                "Origen": (
-                    item.capacity_source.value if item.capacity_source is not None else None
-                ),
+                "Origen capacidad": _capacity_source_label(item.capacity_source),
             }
             for item in allocation.manager_summaries
         ])
@@ -1193,7 +1213,7 @@ def _render_management_allocation(
             alt="Origen y cálculo del objetivo base mensual por gestor",
             column_config={
                 "Horas teóricas": st.column_config.NumberColumn(format="%.2f h"),
-                "Horas descontadas por ausencias": st.column_config.NumberColumn(format="%.2f h"),
+                "Ausencias": st.column_config.NumberColumn(format="%.2f h"),
                 "Horas laborables mes": st.column_config.NumberColumn(format="%.2f h"),
                 "Capacidad %": st.column_config.NumberColumn(format="%.1f %%"),
                 "Objetivo base": st.column_config.NumberColumn(format="%.2f h"),
@@ -1363,3 +1383,11 @@ def _audit_dataframe(records: Iterable) -> pd.DataFrame:
 
 def _format_hours(value: float) -> str:
     return f"{value:,.2f} h".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _capacity_source_label(source: CapacitySource | None) -> str:
+    if source == CapacitySource.THEORETICAL_CALENDAR:
+        return "Calendario"
+    if source == CapacitySource.PEER_MONTHLY_AVERAGE:
+        return "Media gestores"
+    return source.value if source is not None else "Sin capacidad"

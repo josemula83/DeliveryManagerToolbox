@@ -502,14 +502,120 @@ class MonthlyManagerCapacityTests(unittest.TestCase):
 
         self.assertEqual(
             allocated.allocation_result.allocation_status,
-            AllocationStatus.MANAGER_NOT_FOUND_IN_SHEET,
+            AllocationStatus.NO_REFERENCE_MANAGER_CAPACITY,
         )
         self.assertEqual(allocated.allocation_result.total_assigned_hours, 0)
         self.assertTrue(any(
-            "MANAGER_NOT_FOUND_IN_SHEET" in item
+            "NO_REFERENCE_MANAGER_CAPACITY" in item
             for item in allocated.allocation_result.incidents
         ))
         self.assertIsNone(optimized.rate_optimization_result)
+
+    def test_absent_manager_uses_present_managers_monthly_average(self) -> None:
+        source = sheet_with_people(
+            ("M-J", "Jose Antonio Ferrandez Mula", 138),
+            ("M-P", "Pedro Miguel Franco Sarabia", 129),
+            ("M-R", "Rafael Juan Guerra", 183),
+        )
+        config = BillingConfiguration(management_people=(
+            ManagementPerson("Daniel Alarcón Guerrero", 100, "M-D"),
+            ManagementPerson("Jose Antonio Ferrandez Mula", 50, "M-J"),
+            ManagementPerson("Pedro Miguel Franco Sarabia", 100, "M-P"),
+            ManagementPerson("Rafael Juan Guerra", 100, "M-R"),
+        ))
+
+        result = calculate_management_allocation(
+            source,
+            (calculation("EXT-A", 10),),
+            config,
+        )
+        summaries = {item.manager_name: item for item in result.manager_summaries}
+
+        self.assertEqual(summaries["Daniel Alarcón Guerrero"].monthly_workable_hours, 150)
+        self.assertEqual(summaries["Daniel Alarcón Guerrero"].base_target_hours, 150)
+        self.assertEqual(
+            summaries["Daniel Alarcón Guerrero"].capacity_source,
+            CapacitySource.PEER_MONTHLY_AVERAGE,
+        )
+        self.assertEqual(summaries["Jose Antonio Ferrandez Mula"].base_target_hours, 69)
+        self.assertEqual(summaries["Jose Antonio Ferrandez Mula"].capacity_source, CapacitySource.THEORETICAL_CALENDAR)
+        self.assertEqual(
+            {item.manager_name: item.assigned_hours for item in result.manager_summaries},
+            {
+                "Daniel Alarcón Guerrero": 3,
+                "Jose Antonio Ferrandez Mula": 1,
+                "Pedro Miguel Franco Sarabia": 2.5,
+                "Rafael Juan Guerra": 3.5,
+            },
+        )
+        self.assertTrue(any("PEER_MONTHLY_AVERAGE" in item for item in result.incidents))
+
+    def test_peer_average_is_rounded_down_and_percentage_is_applied_afterwards(self) -> None:
+        source = sheet_with_people(
+            ("M-A", "Gestor A", 131),
+            ("M-B", "Gestor B", 138),
+            ("M-C", "Gestor C", 183),
+        )
+        config = BillingConfiguration(management_people=(
+            ManagementPerson("Gestor A", 100, "M-A"),
+            ManagementPerson("Gestor B", 100, "M-B"),
+            ManagementPerson("Gestor C", 100, "M-C"),
+            ManagementPerson("Gestor Ausente", 50, "M-X"),
+        ))
+
+        target = next(
+            item
+            for item in calculate_manager_targets(10, source, config)
+            if item.manager_name == "Gestor Ausente"
+        )
+
+        self.assertEqual(target.monthly_workable_hours, 150.5)
+        self.assertEqual(target.base_target_hours, 75.25)
+
+    def test_absent_manager_applies_fifty_percent_after_exact_average(self) -> None:
+        source = sheet_with_people(
+            ("M-J", "Jose", 138),
+            ("M-P", "Pedro", 129),
+            ("M-R", "Rafael", 183),
+        )
+        config = BillingConfiguration(management_people=(
+            ManagementPerson("Daniel", 50, "M-D"),
+            ManagementPerson("Jose", 100, "M-J"),
+            ManagementPerson("Pedro", 100, "M-P"),
+            ManagementPerson("Rafael", 100, "M-R"),
+        ))
+
+        target = next(
+            item
+            for item in calculate_manager_targets(10, source, config)
+            if item.manager_name == "Daniel"
+        )
+
+        self.assertEqual(target.monthly_workable_hours, 150)
+        self.assertEqual(target.base_target_hours, 75)
+        self.assertEqual(target.capacity_source, CapacitySource.PEER_MONTHLY_AVERAGE)
+
+    def test_multiple_absent_managers_share_average_without_feeding_it(self) -> None:
+        source = sheet_with_people(
+            ("M-A", "Gestor A", 160),
+            ("M-B", "Gestor B", 180),
+        )
+        config = BillingConfiguration(management_people=(
+            ManagementPerson("Gestor A", 100, "M-A"),
+            ManagementPerson("Gestor B", 100, "M-B"),
+            ManagementPerson("Gestor Ausente A", 100, "M-X"),
+            ManagementPerson("Gestor Ausente B", 50, "M-Y"),
+        ))
+
+        targets = {
+            item.manager_name: item
+            for item in calculate_manager_targets(10, source, config)
+        }
+
+        self.assertEqual(targets["Gestor Ausente A"].monthly_workable_hours, 170)
+        self.assertEqual(targets["Gestor Ausente B"].monthly_workable_hours, 170)
+        self.assertEqual(targets["Gestor Ausente A"].base_target_hours, 170)
+        self.assertEqual(targets["Gestor Ausente B"].base_target_hours, 85)
 
     def test_present_manager_without_resolved_calendar_blocks_allocation(self) -> None:
         source = replace(

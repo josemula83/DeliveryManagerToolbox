@@ -5,6 +5,7 @@ from __future__ import annotations
 import calendar
 from collections.abc import Iterable
 from datetime import date, datetime
+import math
 import re
 
 from delivery_manager_toolbox.modules.facturacion.models import (
@@ -224,6 +225,11 @@ def calculate_manager_base_target(monthly_workable_hours: float, percentage: flo
     return monthly_workable_hours * percentage / 100
 
 
+def floor_to_half_hour(value: float) -> float:
+    """Normaliza una capacidad hacia abajo al escalón común de 0,5 h."""
+    return math.floor((value + 1e-12) / 0.5) * 0.5
+
+
 def _month_from_text(value: str) -> int | None:
     normalized = normalize_identifier(value)
     return next((month for name, month in _MONTH_NAMES.items() if name in normalized), None)
@@ -255,6 +261,7 @@ __all__ = [
     "calculate_manager_base_target",
     "calculate_monthly_workable_hours",
     "detect_person_absences",
+    "floor_to_half_hour",
     "is_non_working_code",
     "resolve_sheet_period",
 ]
