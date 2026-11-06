@@ -37,4 +37,4 @@ El HTML calcula `amount = billHours * billingTariff`, donde `billHours = managem
 - Dos gestores con dos bloques de 5 h cada uno y objetivo 7 h: cada gestor recibe un bloque x1 y otro x2,5, distribuyendo la carga baja por igual.
 - Dos registros del mismo gestor/cuenta se convierten en uno solo sin alterar sus horas.
 
-La generación del Excel final permanece fuera de esta fase.
+La generación del Excel final se documenta por separado en `docs/facturacion_legacy_export.md`.

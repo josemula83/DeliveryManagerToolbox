@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, MutableMapping
+from collections.abc import Iterable, Mapping, MutableMapping
 from hashlib import sha256
 import json
 
@@ -45,6 +45,10 @@ from delivery_manager_toolbox.modules.facturacion.excel_reader import (
     WorkbookInspectionError,
     inspect_workbook,
     parse_hierarchical_worksheet,
+)
+from delivery_manager_toolbox.modules.facturacion.excel_export import (
+    BillingExportError,
+    export_billing_workbook,
 )
 from delivery_manager_toolbox.modules.facturacion.models import (
     AccountCatalogItem,
@@ -182,7 +186,7 @@ def render_page() -> None:
     workbook_result = st.session_state.get(_WORKBOOK_RESULT_KEY)
     has_result = result is not None or workbook_result is not None
     st.caption(
-        "Cálculo, reparto y tarifas completados; el Excel final sigue pendiente."
+        "Cálculo, reparto y tarifas completados; el Excel final está listo para validar."
         if has_result else
         "Excel preparado para calcular." if workbook_info else
         "Carga un Excel para iniciar el análisis."
@@ -191,6 +195,14 @@ def render_page() -> None:
         _render_workbook_calculation_outputs(workbook_result)
     else:
         _render_calculation_outputs(result if isinstance(result, SheetCalculationResult) else None)
+    if uploaded_file is not None and has_result:
+        if isinstance(workbook_result, WorkbookCalculationResult):
+            export_results = workbook_result.results_by_sheet
+        elif isinstance(result, SheetCalculationResult):
+            export_results = {result.sheet_name: result}
+        else:
+            export_results = {}
+        _render_excel_export(uploaded_file, export_results)
 
 
 def _configuration() -> BillingConfiguration:
@@ -740,6 +752,59 @@ def _render_persistence(configuration: BillingConfiguration) -> None:
             st.error(f"No se pudo importar: {exc}")
 
 
+def _render_excel_export(
+    uploaded_file: UploadedFile,
+    results_by_sheet: Mapping[str, SheetCalculationResult],
+) -> None:
+    st.subheader("Excel final")
+    try:
+        artifact = export_billing_workbook(
+            uploaded_file.getvalue(),
+            uploaded_file.name,
+            results_by_sheet,
+        )
+    except (BillingExportError, OSError, ValueError) as exc:
+        st.error(f"No se puede generar el Excel final: {exc}", icon=":material/error:")
+        return
+
+    metrics = st.columns(6)
+    metrics[0].metric("Meses incluidos", len(artifact.included_sheets), border=True, height="stretch")
+    metrics[1].metric("Horas gestión", _format_hours(artifact.total_management_hours), border=True, height="stretch")
+    metrics[2].metric("Importe total", f"{artifact.total_amount:.2f} €", border=True, height="stretch")
+    metrics[3].metric("Gestores", artifact.manager_count, border=True, height="stretch")
+    metrics[4].metric("Cuentas", artifact.account_count, border=True, height="stretch")
+    metrics[5].metric("Incidencias", artifact.incident_count, border=True, height="stretch")
+    with st.expander("Ver validación del Excel generado"):
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Mes": item.sheet_name,
+                    "Gestión calculada": item.management_hours,
+                    "Gestión exportada": item.exported_management_hours,
+                    "Horas facturables": item.billable_hours,
+                    "Resumen facturable": item.summary_billable_hours,
+                    "Importe": item.total_amount,
+                    "Gestores": item.managers,
+                    "Cuentas": item.accounts,
+                }
+                for item in artifact.validations
+            ]),
+            hide_index=True,
+            width="stretch",
+            alt="Validaciones por mes del Excel final",
+        )
+    st.download_button(
+        "DESCARGAR EXCEL FINAL",
+        data=artifact.contents,
+        file_name=artifact.filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        icon=":material/download:",
+        type="primary",
+        width="stretch",
+        key="download_final_billing_excel",
+    )
+
+
 def _calculation_context(
     uploaded_file: UploadedFile | None,
     analysis: SheetAnalysis | None,
@@ -971,7 +1036,7 @@ def _render_sheet_calculation_output(
             column_config={"Horas": st.column_config.NumberColumn(format="%.2f h")},
         )
 
-    st.caption("La generación del Excel final sigue pendiente.")
+    st.caption("El Excel final se genera y valida al terminar todos los resultados del cálculo.")
 
 
 def _render_management_allocation(

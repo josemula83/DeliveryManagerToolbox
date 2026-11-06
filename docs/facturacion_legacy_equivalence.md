@@ -42,7 +42,7 @@ Fuente de verdad: `legacy/facturacion_anterior.html`, marcador **Facturación BB
 | Horas facturadas | `managementHours / multiplier` | Antes eran iguales a horas de gestión | Corregido a legacy | Bajo |
 | Optimización | Global, minimiza desviación y reparte penalizaciones x1/x2 | Antes hacía selección directa | Corregido a legacy | Bajo |
 | Tarifa única | Consolida gestor-cuenta antes de optimizar | Antes consolidaba por gestor-cuenta-tarifa | Corregido a legacy | Bajo |
-| Exportación | Reescribe las hojas del XLSX y genera `_GESTION.xlsx` | Pendiente | No coincide | Alto; fuera del alcance actual |
+| Exportación | Reescribe cada hoja calculada como informe por cuenta y genera un nuevo XLSX | Antes pendiente | Corregido a legacy | Bajo |
 
 ## Funciones JavaScript de referencia
 
@@ -60,4 +60,4 @@ Fuente de verdad: `legacy/facturacion_anterior.html`, marcador **Facturación BB
 - Una cuenta se divide en el límite de cuota; no se aplica tolerancia para conservarla completa.
 - El reparto conserva el cuadre exacto por cuenta y hoja y es determinista.
 
-La exportación continúa pendiente. Capacidad, reparto y tarifas ya reproducen las reglas funcionales del HTML V1.3.
+Capacidad, reparto, tarifas y exportación reproducen las reglas funcionales del HTML V1.3.

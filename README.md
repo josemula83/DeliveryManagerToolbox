@@ -98,6 +98,8 @@ Cada Persona en Gestión se asocia primero por identificador de empleado y despu
 
 La fase de tarifas se ejecuta explícitamente después del reparto y toma esas asignaciones sin cambiar sus horas. Replica Facturación BBVA V1.3: el bloque configurado aporta la tarifa base y, en su ausencia, se toma la primera tarifa original de la cuenta en la hoja. Cada gestor/cuenta se consolida antes de elegir un único multiplicador x2,5, x2 o x1. La optimización minimiza la desviación de capacidad facturable y distribuye las bajadas entre gestores. Se auditan por separado horas reales de gestión, horas facturables, tarifa base, multiplicador, tarifa final e importe. Las cuentas sin tarifa producen incidencias explícitas y los datos nunca se comparten entre meses.
 
+La exportación final replica `buildSheetXml()` de V1.3. Cada pestaña calculada se convierte en un informe por cuenta con personas originales, excepciones, asignaciones de gestión, resumen de gestores y detalle final de cuatro columnas. El legacy no repartía la gestión entre días: exportaba directamente las horas facturables y las horas reales ya validadas. El libro se genera en memoria con el sufijo `_FACTURACION.xlsx`, conserva las hojas no calculadas y se vuelve a abrir para validar horas, tarifas, importes, duplicados y nombres de pestañas antes de habilitar la descarga.
+
 Responsabilidades internas:
 
 - `view.py`: interfaz y estado de sesión;
@@ -108,6 +110,7 @@ Responsabilidades internas:
 - `business.py`: limpieza auditable, agregación de horas base y cálculo de gestión por cuenta;
 - `allocation.py`: objetivos, reparto, rebalanceo y cuadre de horas entre gestores;
 - `rate_optimization.py`: selección, consolidación y resumen de tarifas e importes;
+- `excel_export.py`: generación y validación posterior del XLSX final;
 - `exporter.py`: punto de extensión para el futuro Excel de salida.
 
 La generación del Excel final mediante `exporter.py` sigue deliberadamente pendiente. La interfaz consume contratos estables para que esa fase futura pueda añadirse sin rediseñarla.
