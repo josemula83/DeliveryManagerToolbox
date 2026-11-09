@@ -1,11 +1,11 @@
 # Delivery Manager Toolbox
 
-Aplicación web local y modular para automatizar procesos habituales de Delivery Management. Facturación es el primer módulo real: ya permite preparar y conservar sus reglas, aunque el algoritmo de reparto todavía no está implementado.
+Aplicación web local y modular para automatizar procesos habituales de Delivery Management. Incluye el motor de Facturación y un extractor asistido de incurridos de JIRA.
 
-## Módulos previstos
+## Módulos
 
 - People 360
-- Jira
+- JIRA · Informe de Incurridos
 - Activity Report
 - Facturación
 
@@ -114,6 +114,21 @@ Responsabilidades internas:
 - `exporter.py`: punto de extensión para el futuro Excel de salida.
 
 La generación del Excel final mediante `exporter.py` sigue deliberadamente pendiente. La interfaz consume contratos estables para que esa fase futura pueda añadirse sin rediseñarla.
+
+## Módulo JIRA · Informe de Incurridos
+
+El módulo abre `https://umane.emeal.nttdata.com/jiraito/secure/Dashboard.jspa` y
+proporciona el marcador versionado **Incurridos BBVA**. El marcador se ejecuta
+dentro de la pestaña autenticada de JIRA porque el navegador no permite que
+Streamlit comparta esa sesión ni controle otra pestaña. La Toolbox no almacena
+credenciales, cookies ni respuestas de JIRA.
+
+El extractor consulta los proyectos `BBVACS`, `BBVAALPHA`, `BBVAVALORE`,
+`BBVAGDV`, `BBVACIB` y `BBVACIBGM`. Divide el periodo en meses naturales,
+continúa ante errores parciales y genera un CSV compatible con Excel: UTF-8 con
+BOM, separador de punto y coma y columnas iniciales `PKEY`, `Año`, `Mes` y
+`Año-Mes`. La instalación, arquitectura y limitaciones se describen en
+[`docs/jira_incurridos.md`](docs/jira_incurridos.md).
 
 ## Comprobaciones
 

@@ -22,6 +22,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"delivery_manager_toolbox.modules.jira" = ["assets/*.js"]
+
 [tool.pytest.ini_options]
 addopts = "-q -p no:cacheprovider"
 pythonpath = ["src"]

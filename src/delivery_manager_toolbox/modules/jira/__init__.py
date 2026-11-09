@@ -1,12 +1,19 @@
+"""Herramienta asistida para extraer incurridos desde una sesión JIRA activa."""
+
 from delivery_manager_toolbox.core.models import ModuleDefinition
 
 
 def render() -> None:
-    import streamlit as st
+    from delivery_manager_toolbox.modules.jira.view import render_page
 
-    st.title("Jira")
-    st.info("Módulo preparado para su futura implementación.")
+    render_page()
 
 
-MODULE = ModuleDefinition("jira", "Jira", "Automatizaciones relacionadas con Jira", 30, render)
+MODULE = ModuleDefinition(
+    "jira",
+    "JIRA · Incurridos",
+    "Extracción consolidada de Worklogs desde JIRA",
+    30,
+    render,
+)
 
