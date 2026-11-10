@@ -6,7 +6,7 @@
   if (previousModal) previousModal.remove();
 
   if (window.location.origin !== CONFIG.allowedOrigin) {
-    window.alert(`Abre primero JIRA en ${CONFIG.dashboardUrl} y vuelve a ejecutar el marcador.`);
+    window.alert(`Abre primero JIRA en ${CONFIG.dashboardUrl} y vuelve al módulo de la Toolbox.`);
     return;
   }
 

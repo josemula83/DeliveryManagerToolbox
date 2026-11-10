@@ -6,8 +6,7 @@ from __future__ import annotations
 JIRA_DASHBOARD_URL = "https://umane.emeal.nttdata.com/jiraito/secure/Dashboard.jspa"
 JIRA_ALLOWED_ORIGIN = "https://umane.emeal.nttdata.com"
 TIMESHEET_ENDPOINT = "/jiraito/rest/scriptrunner/latest/custom/getReportTimesheet"
-BOOKMARKLET_NAME = "Incurridos BBVA"
-EXTRACTOR_VERSION = "1.0.0"
+EXTRACTOR_VERSION = "2.0.0"
 MODAL_ID = "incBBVA"
 REQUEST_DELAY_MS = 150
 DATE_COLUMN_INDEX = 15

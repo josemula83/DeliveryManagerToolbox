@@ -1,6 +1,6 @@
 # Delivery Manager Toolbox
 
-Aplicación web local y modular para automatizar procesos habituales de Delivery Management. Incluye el motor de Facturación y un extractor asistido de incurridos de JIRA.
+Aplicación local y modular para automatizar procesos habituales de Delivery Management. Incluye el motor de Facturación y un navegador JIRA integrado para extraer incurridos.
 
 ## Módulos
 
@@ -13,7 +13,8 @@ Aplicación web local y modular para automatizar procesos habituales de Delivery
 
 ```text
 DeliveryMAnagerToolBox/
-├── app.py                         # Punto de entrada de Streamlit
+├── desktop.py                     # Arranque recomendado (Toolbox + Edge WebView2)
+├── app.py                         # Punto de entrada directo de Streamlit
 ├── config/
 │   ├── settings.toml              # Configuración general no sensible
 │   └── facturacion.json           # Reglas persistentes de Facturación
@@ -57,12 +58,18 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python desktop.py
+```
+
+El contenedor abre la Toolbox en una ventana local y reserva otra ventana Edge/WebView2 para JIRA. El perfil persistente se guarda en `%LOCALAPPDATA%\DeliveryManagerToolbox\WebView2`, fuera del repositorio. Para detener la aplicación, cierra la ventana principal.
+
+El arranque web tradicional sigue disponible para los módulos que no necesitan el navegador integrado:
+
+```powershell
 streamlit run app.py
 ```
 
-La aplicación abrirá normalmente `http://localhost:8501`. Para detenerla, pulsa `Ctrl+C`.
-
-En macOS o Linux, la activación del entorno es `source .venv/bin/activate`; el resto de comandos es igual.
+En macOS o Linux, la interfaz web puede arrancarse con `streamlit run app.py`, pero el navegador JIRA integrado requiere Windows y Edge WebView2.
 
 ## Configuración
 
@@ -117,17 +124,18 @@ La generación del Excel final mediante `exporter.py` sigue deliberadamente pend
 
 ## Módulo JIRA · Informe de Incurridos
 
-El módulo abre `https://umane.emeal.nttdata.com/jiraito/secure/Dashboard.jspa` y
-proporciona el marcador versionado **Incurridos BBVA**. El marcador se ejecuta
-dentro de la pestaña autenticada de JIRA porque el navegador no permite que
-Streamlit comparta esa sesión ni controle otra pestaña. La Toolbox no almacena
-credenciales, cookies ni respuestas de JIRA.
+El módulo abre JIRA en una ventana Edge/WebView2 controlada por el contenedor de
+escritorio. El login se realiza dentro de esa ventana y el perfil se conserva
+fuera del repositorio. Cuando la navegación vuelve al origen JIRA autorizado,
+el controlador inyecta automáticamente el extractor versionado. La navegación
+no usa iframes ni botones a navegadores externos, y Python no gestiona
+credenciales o cookies.
 
 El extractor consulta los proyectos `BBVACS`, `BBVAALPHA`, `BBVAVALORE`,
 `BBVAGDV`, `BBVACIB` y `BBVACIBGM`. Divide el periodo en meses naturales,
 continúa ante errores parciales y genera un CSV compatible con Excel: UTF-8 con
 BOM, separador de punto y coma y columnas iniciales `PKEY`, `Año`, `Mes` y
-`Año-Mes`. La instalación, arquitectura y limitaciones se describen en
+`Año-Mes`. El flujo, la arquitectura y las limitaciones se describen en
 [`docs/jira_incurridos.md`](docs/jira_incurridos.md).
 
 ## Comprobaciones

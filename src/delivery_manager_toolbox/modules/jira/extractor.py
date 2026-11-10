@@ -1,15 +1,12 @@
-"""Generación reproducible del marcador y su instalador local."""
+"""Carga e inyección segura del extractor versionado de JIRA."""
 
 from __future__ import annotations
 
 from functools import lru_cache
-import html
 from importlib.resources import files
 import json
-from urllib.parse import quote
 
 from delivery_manager_toolbox.modules.jira.constants import (
-    BOOKMARKLET_NAME,
     DATE_COLUMN_INDEX,
     DEFAULT_PROJECTS,
     EXTRACTOR_VERSION,
@@ -32,6 +29,7 @@ def load_extractor_source() -> str:
 
 
 def render_extractor_source() -> str:
+    """Inserta exclusivamente configuración pública en el JavaScript legible."""
     template = load_extractor_source()
     if template.count(_CONFIG_TOKEN) != 1:
         raise ValueError("La plantilla del extractor no contiene un único marcador de configuración.")
@@ -52,29 +50,15 @@ def render_extractor_source() -> str:
     )
 
 
-def build_bookmarklet() -> str:
-    """Codifica el fuente legible como una URL JavaScript de una sola línea."""
-    return "javascript:" + quote(render_extractor_source(), safe="()")
+def build_injection_script() -> str:
+    """Evita duplicados y ejecuta el extractor en el documento JIRA ya cargado."""
+    modal_id = json.dumps(MODAL_ID)
+    return (
+        "(() => {"
+        f"if (document.getElementById({modal_id})) return;"
+        f"{render_extractor_source()}"
+        "})();"
+    )
 
 
-def build_installer_html() -> str:
-    bookmarklet = html.escape(build_bookmarklet(), quote=True)
-    name = html.escape(BOOKMARKLET_NAME)
-    return f"""<!doctype html>
-<html lang="es">
-<head><meta charset="utf-8"><title>Instalar {name}</title></head>
-<body style="font-family:Arial,sans-serif;padding:24px;color:#172b4d">
-  <h1 style="font-size:22px">Instalar {name}</h1>
-  <p>Arrastra el siguiente botón a la barra de favoritos del navegador:</p>
-  <p><a href="{bookmarklet}" style="display:inline-block;background:#1464a5;color:#fff;text-decoration:none;padding:11px 18px;border-radius:5px;font-weight:bold">{name}</a></p>
-  <p>Después abre JIRA, inicia sesión y pulsa el favorito.</p>
-</body>
-</html>"""
-
-
-__all__ = [
-    "build_bookmarklet",
-    "build_installer_html",
-    "load_extractor_source",
-    "render_extractor_source",
-]
+__all__ = ["build_injection_script", "load_extractor_source", "render_extractor_source"]

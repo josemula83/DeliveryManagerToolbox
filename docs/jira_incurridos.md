@@ -1,46 +1,44 @@
 # JIRA · Informe de Incurridos BBVA
 
-La herramienta consolida Worklogs de los proyectos `BBVACS`, `BBVAALPHA`,
-`BBVAVALORE`, `BBVAGDV`, `BBVACIB` y `BBVACIBGM`. La página de la Toolbox abre
-`https://umane.emeal.nttdata.com/jiraito/secure/Dashboard.jspa` y proporciona el
-marcador **Incurridos BBVA**.
+La herramienta consolida Worklogs de los proyectos configurados en el extractor.
+JIRA se abre en una ventana Edge/WebView2 administrada por Delivery Manager
+Toolbox. Si la sesión no está autenticada, el usuario inicia sesión directamente
+en esa ventana; al llegar al origen autorizado, la aplicación inyecta
+automáticamente el formulario de extracción.
 
 ## Sesión y arquitectura
 
-El endpoint de ScriptRunner usa la sesión autenticada de JIRA. Una página de
-Streamlit no puede leer las cookies ni ejecutar código en otra pestaña por la
-política de mismo origen del navegador. Por ello, el marcador se ejecuta dentro
-de la pestaña de JIRA. La Toolbox no recibe ni almacena credenciales, cookies o
-respuestas del informe.
+El arranque recomendado es `python desktop.py`. El contenedor inicia Streamlit en
+un puerto local no fijo y crea dos ventanas pertenecientes al mismo proceso de
+escritorio: la Toolbox y JIRA. La selección del módulo JIRA envía una orden por
+un canal efímero limitado a `127.0.0.1` para mostrar la segunda ventana.
 
-El código mantenible está en `modules/jira/assets/extractor.js`. El generador
-inyecta únicamente configuración pública y codifica ese fuente como una URL
-`javascript:` instalable. También genera un HTML local desde el que se puede
-arrastrar el marcador a la barra de favoritos.
+El perfil de WebView2 se conserva en
+`%LOCALAPPDATA%\DeliveryManagerToolbox\WebView2`, fuera del repositorio. WebView2
+gestiona directamente la sesión. El código Python no lee, copia ni registra
+credenciales, cookies, tokens, URLs de navegación o respuestas del informe.
+
+El controlador clasifica únicamente el estado general de cada navegación:
+carga, autenticación externa, login de JIRA o documento del origen autorizado.
+Solo en este último caso ejecuta el fuente versionado
+`modules/jira/assets/extractor.js`. La protección por identificador de modal
+evita inyecciones duplicadas en un mismo documento.
 
 ## Uso
 
-1. En la Toolbox, abre **JIRA · Incurridos**.
-2. Descarga y abre el instalador HTML; después arrastra **Incurridos BBVA** a la
-   barra de favoritos. Como alternativa, copia manualmente la dirección mostrada.
-3. Pulsa **Abrir JIRA** e inicia sesión.
-4. Desde la pestaña de JIRA, pulsa el favorito instalado.
-5. Elige las fechas y proyectos, genera el informe y descarga el CSV.
-
-La acción manual de pulsar el favorito es necesaria porque el navegador impide
-que Streamlit inyecte código automáticamente en JIRA.
+1. Ejecuta `python desktop.py` desde el entorno virtual del proyecto.
+2. Selecciona **JIRA · Incurridos** en la Toolbox. La ventana integrada aparece
+   automáticamente y sin botones hacia navegadores externos.
+3. Inicia sesión si JIRA o el proveedor corporativo de identidad lo solicitan.
+4. Al volver a JIRA, espera a que aparezca el formulario **Incurridos BBVA**.
+5. Elige fechas y proyectos, genera el informe y descarga el CSV.
 
 ## Consultas y consolidación
 
-El extractor divide el rango por meses naturales. Por ejemplo, del 15 de enero
-al 10 de marzo consulta `15/01–31/01`, `01/02–28/02` y `01/03–10/03` por cada
-proyecto seleccionado. Las peticiones son secuenciales, con una pausa de 150 ms,
-contra:
-
-`/jiraito/rest/scriptrunner/latest/custom/getReportTimesheet`
-
-Los fallos parciales se registran y las demás consultas continúan. No se registran
-en disco respuestas ni datos personales.
+El extractor divide el rango por meses naturales. Las peticiones se realizan
+secuencialmente contra el endpoint de ScriptRunner usando la sesión del propio
+WebView2. Los fallos parciales se muestran y las demás consultas continúan. No
+se registran en disco respuestas ni datos personales.
 
 ## CSV
 
@@ -50,8 +48,11 @@ con BOM, punto y coma como separador y todos los campos entre comillas. Añade
 
 ## Limitaciones
 
-- Es necesaria una sesión JIRA activa y acceso a la red corporativa.
-- La barra de favoritos debe permitir marcadores `javascript:`.
-- La validación automatizada usa respuestas sintéticas; no consulta datos reales.
-- Si cambia el contrato del endpoint o la posición de su columna de fecha, deberá
-  publicarse una nueva versión del extractor.
+- Se requiere Windows, Microsoft Edge WebView2, acceso a la red corporativa y
+  permisos válidos en JIRA.
+- La validación automatizada usa URLs y respuestas sintéticas; nunca consulta
+  datos reales.
+- Si cambia el origen, el contrato del endpoint o la columna de fecha, debe
+  publicarse una nueva versión controlada del extractor.
+- El arranque directo con `streamlit run app.py` sigue siendo útil para los demás
+  módulos, pero no dispone del navegador JIRA integrado.

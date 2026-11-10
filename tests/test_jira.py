@@ -1,19 +1,29 @@
 from datetime import date
 import json
-from urllib.parse import unquote
+from pathlib import Path
+from urllib.error import URLError
 
 import pytest
 
 from delivery_manager_toolbox.core.registry import discover_modules
+from delivery_manager_toolbox.desktop import JiraWindowController
 from delivery_manager_toolbox.modules.jira import MODULE
-from delivery_manager_toolbox.modules.jira.bookmarklet import (
-    build_bookmarklet,
-    build_installer_html,
+from delivery_manager_toolbox.modules.jira.browser import (
+    JiraBrowserState,
+    build_browser_configuration,
+    decide_navigation,
+)
+from delivery_manager_toolbox.modules.jira.desktop_bridge import (
+    BRIDGE_TOKEN_ENV,
+    BRIDGE_URL_ENV,
+    request_jira_window,
+)
+from delivery_manager_toolbox.modules.jira.extractor import (
+    build_injection_script,
     load_extractor_source,
     render_extractor_source,
 )
 from delivery_manager_toolbox.modules.jira.constants import (
-    BOOKMARKLET_NAME,
     DATE_COLUMN_INDEX,
     DEFAULT_PROJECTS,
     JIRA_DASHBOARD_URL,
@@ -205,16 +215,12 @@ def test_export_filename_contains_requested_dates() -> None:
     )
 
 
-def test_bookmarklet_is_generated_from_versioned_readable_source() -> None:
+def test_extractor_is_generated_from_versioned_readable_source() -> None:
     source = load_extractor_source()
     rendered = render_extractor_source()
-    bookmarklet = build_bookmarklet()
 
     assert "__DMT_CONFIG__" in source
     assert "__DMT_CONFIG__" not in rendered
-    assert bookmarklet.startswith("javascript:")
-    assert "\n" not in bookmarklet
-    assert unquote(bookmarklet.removeprefix("javascript:")) == rendered
     assert json.dumps(list(DEFAULT_PROJECTS), ensure_ascii=False, separators=(",", ":")) in rendered
 
 
@@ -239,13 +245,153 @@ def test_download_is_only_enabled_after_a_valid_header() -> None:
     assert TIMESHEET_ENDPOINT in source
 
 
-def test_installer_contains_draggable_bookmarklet_without_credentials() -> None:
-    installer = build_installer_html()
+def test_injection_script_prevents_a_duplicate_modal() -> None:
+    script = build_injection_script()
 
-    assert BOOKMARKLET_NAME in installer
-    assert "javascript:" in installer
-    assert "cookie" not in installer.casefold()
-    assert "password" not in installer.casefold()
+    assert f'document.getElementById("{MODAL_ID}")' in script
+    assert "return;" in script
+    assert "__DMT_CONFIG__" not in script
+    assert TIMESHEET_ENDPOINT in script
+
+
+@pytest.mark.parametrize(
+    ("url", "state", "should_inject"),
+    [
+        (None, JiraBrowserState.LOADING, False),
+        ("about:blank", JiraBrowserState.LOADING, False),
+        (
+            "https://umane.emeal.nttdata.com/jiraito/login.jsp",
+            JiraBrowserState.LOGIN_REQUIRED,
+            False,
+        ),
+        (
+            "https://login.example.test/sso",
+            JiraBrowserState.LOGIN_IN_PROGRESS,
+            False,
+        ),
+        (JIRA_DASHBOARD_URL, JiraBrowserState.AUTHENTICATED, True),
+        ("javascript:alert(1)", JiraBrowserState.ERROR, False),
+    ],
+)
+def test_navigation_decisions(
+    url: str | None,
+    state: JiraBrowserState,
+    should_inject: bool,
+) -> None:
+    decision = decide_navigation(url)
+    assert decision.state is state
+    assert decision.should_inject is should_inject
+
+
+def test_browser_configuration_uses_persistent_edge_profile_outside_repository() -> None:
+    configuration = build_browser_configuration({"LOCALAPPDATA": "C:/Users/test/AppData/Local"})
+
+    assert configuration.renderer == "edgechromium"
+    assert configuration.persistent_session is True
+    assert configuration.allow_downloads is True
+    assert configuration.profile_path == Path(
+        "C:/Users/test/AppData/Local/DeliveryManagerToolbox/WebView2"
+    )
+    assert "DeliveryMAnagerToolBox" not in str(configuration.profile_path)
+
+
+class _SyntheticResponse:
+    def read(self) -> bytes:
+        return b'{"state":"extractor_injected"}'
+
+
+def test_bridge_requests_the_integrated_window_with_ephemeral_authorization() -> None:
+    captured: dict[str, object] = {}
+
+    def opener(request: object, timeout: int) -> _SyntheticResponse:
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _SyntheticResponse()
+
+    status = request_jira_window(
+        {BRIDGE_URL_ENV: "http://127.0.0.1:12345", BRIDGE_TOKEN_ENV: "synthetic-token"},
+        opener=opener,
+    )
+
+    request = captured["request"]
+    assert status.available is True
+    assert status.state is JiraBrowserState.EXTRACTOR_INJECTED
+    assert request.full_url == "http://127.0.0.1:12345/jira/open"
+    assert request.get_header("Authorization") == "Bearer synthetic-token"
+    assert captured["timeout"] == 2
+
+
+def test_bridge_reports_unavailable_without_desktop_or_on_connection_error() -> None:
+    assert request_jira_window({}).available is False
+
+    def failing_opener(request: object, timeout: int) -> object:
+        raise URLError("synthetic failure")
+
+    status = request_jira_window(
+        {BRIDGE_URL_ENV: "http://127.0.0.1:12345", BRIDGE_TOKEN_ENV: "synthetic-token"},
+        opener=failing_opener,
+    )
+    assert status.available is False
+    assert status.state is JiraBrowserState.ERROR
+
+
+class _SyntheticWindow:
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.scripts: list[str] = []
+        self.was_shown = False
+        self.was_restored = False
+        self.was_hidden = False
+        self.was_destroyed = False
+
+    def get_current_url(self) -> str:
+        return self.url
+
+    def run_js(self, script: str) -> None:
+        self.scripts.append(script)
+
+    def show(self) -> None:
+        self.was_shown = True
+
+    def restore(self) -> None:
+        self.was_restored = True
+
+    def hide(self) -> None:
+        self.was_hidden = True
+
+    def destroy(self) -> None:
+        self.was_destroyed = True
+
+
+def test_controller_injects_only_after_authenticated_jira_navigation() -> None:
+    window = _SyntheticWindow("https://login.example.test/sso")
+    controller = JiraWindowController()
+    controller.attach(window)
+
+    controller.on_loaded()
+    assert controller.state is JiraBrowserState.LOGIN_IN_PROGRESS
+    assert window.scripts == []
+
+    window.url = JIRA_DASHBOARD_URL
+    controller.on_loaded()
+    assert controller.state is JiraBrowserState.EXTRACTOR_INJECTED
+    assert len(window.scripts) == 1
+
+
+def test_controller_reuses_window_and_closes_it_with_main_application() -> None:
+    window = _SyntheticWindow(JIRA_DASHBOARD_URL)
+    controller = JiraWindowController()
+    controller.attach(window)
+
+    assert controller.open() is JiraBrowserState.LOADING
+    assert window.was_shown is True
+    assert window.was_restored is True
+    assert controller.on_closing() is False
+    assert window.was_hidden is True
+
+    controller.shutdown()
+    assert window.was_destroyed is True
+    assert controller.on_closing() is True
 
 
 def test_jira_module_is_available_in_main_navigation() -> None:

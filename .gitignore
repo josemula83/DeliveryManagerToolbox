@@ -9,6 +9,7 @@ htmlcov/
 .venv/
 venv/
 .env
+.dmt-webview/
 .idea/
 .vscode/
 logs/*.log
