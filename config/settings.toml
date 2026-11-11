@@ -9,3 +9,14 @@ file = "logs/delivery-manager-toolbox.log"
 [jira]
 people_file = "config/jira_people.json"
 
+[people360]
+source = "sharepoint"
+sharepoint_site = "BBVACentros"
+sharepoint_folder = "Documentos compartidos/General/PowerBI/Dashboard People 360"
+file_name = "empleados.xlsx"
+local_file = ""
+alert_threshold_days = 60
+priority_medium_min = 60
+priority_ok_above = 80
+export_file_name = "seguimiento_people_360.xlsx"
+

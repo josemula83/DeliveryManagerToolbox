@@ -13,6 +13,9 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(settings.logging.file.is_absolute())
         self.assertEqual(settings.logging.file.parent, PROJECT_ROOT / "logs")
         self.assertEqual(settings.jira.people_file, PROJECT_ROOT / "config" / "jira_people.json")
+        self.assertEqual(settings.people360.source, "sharepoint")
+        self.assertEqual(settings.people360.alert_threshold_days, 60)
+        self.assertEqual(settings.people360.export_file_name, "seguimiento_people_360.xlsx")
 
     def test_explicit_config_path_is_supported(self) -> None:
         settings = load_settings(Path("config/settings.toml"))

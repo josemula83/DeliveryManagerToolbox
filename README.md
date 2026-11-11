@@ -155,6 +155,12 @@ El CSV usa UTF-8 con BOM, separador de punto y coma y columnas iniciales `PKEY`,
 `Año`, `Mes` y `Año-Mes`. El flujo, la arquitectura y las limitaciones se describen en
 [`docs/jira_incurridos.md`](docs/jira_incurridos.md).
 
+## Módulo People 360
+
+People 360 transforma las hojas reales `Empleados`, `Bitacoras` e `Historico reuniones` en una vista ejecutiva por Supervisor N1. Muestra KPIs globales, coberturas separadas de empleado y supervisor, prioridad semántica, seguimiento con más de 60 días, reuniones, filtros, ficha individual e histórico. La vista filtrada puede exportarse a Excel.
+
+La fuente SharePoint, el fichero, el umbral y las reglas de prioridad se centralizan en `config/settings.toml`. Como el runtime todavía no incorpora un cliente corporativo Microsoft 365 reutilizable, el módulo define el puerto de integración y admite carga XLSX o una ruta local mediante `PEOPLE360_SOURCE=local` y `PEOPLE360_LOCAL_FILE` para desarrollo. No almacena credenciales ni persiste el contenido del libro. Consulta la arquitectura, fórmula de cobertura y limitaciones en [`docs/people_360.md`](docs/people_360.md).
+
 ## Comprobaciones
 
 ```powershell
