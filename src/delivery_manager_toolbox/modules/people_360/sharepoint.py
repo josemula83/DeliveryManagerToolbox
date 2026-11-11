@@ -262,6 +262,21 @@ def create_people360_repository(
     )
 
 
+def authenticate_people360(
+    settings: People360Settings,
+    token_provider: AccessTokenProvider | None = None,
+) -> None:
+    """Obtiene el consentimiento delegado antes de permitir el acceso al fichero."""
+    if settings.source == "local":
+        return
+    if settings.source != "sharepoint":
+        raise AuthenticationConfigurationError(f"Fuente People 360 no soportada: {settings.source}")
+    provider = token_provider or _token_provider(
+        settings.graph_client_id, settings.graph_tenant_id
+    )
+    provider.get_token(settings.graph_scope)
+
+
 def _normalize(value: object) -> str:
     text = " ".join(str(value or "").strip().casefold().split())
     return "".join(

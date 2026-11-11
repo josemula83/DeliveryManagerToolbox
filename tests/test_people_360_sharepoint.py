@@ -19,6 +19,7 @@ from delivery_manager_toolbox.modules.people_360.sharepoint import (
     LocalPeople360Repository,
     MicrosoftGraphPeople360Client,
     SharePointPeople360Repository,
+    authenticate_people360,
     create_people360_repository,
 )
 from delivery_manager_toolbox.modules.people_360.ui import load_people360_dashboard
@@ -181,12 +182,23 @@ class SharePointRepositoryTests(unittest.TestCase):
         self.assertEqual(first.metrics.total_employees, 1)
         self.assertEqual(second.metrics.total_employees, 2)
 
+    def test_login_requests_graph_scope_before_file_access(self) -> None:
+        token = FakeTokenProvider()
+        authenticate_people360(settings(), token_provider=token)
+        self.assertEqual(token.scopes, [settings().graph_scope])
+
+    def test_local_mode_does_not_request_microsoft_login(self) -> None:
+        token = FakeTokenProvider()
+        authenticate_people360(settings("local", Path("synthetic.xlsx")), token_provider=token)
+        self.assertEqual(token.scopes, [])
+
     def test_production_ui_has_no_manual_uploader(self) -> None:
         from delivery_manager_toolbox.modules.people_360 import ui
 
         source = inspect.getsource(ui.render)
         self.assertNotIn("file_uploader", source)
         self.assertIn("Actualizar datos", source)
+        self.assertIn("_render_login", source)
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ La alerta de antigüedad compara la última bitácora válida del supervisor con
 
 ## Autenticación y SharePoint
 
-`AzureIdentityTokenProvider` utiliza `InteractiveBrowserCredential`, flujo de autorización delegado con PKCE. La primera carga abre el inicio de sesión corporativo si no existe una sesión válida. El token se conserva en la caché de Azure Identity cifrada por el mecanismo de protección del usuario de Windows; nunca se escribe en configuración, logs o el repositorio.
+`AzureIdentityTokenProvider` utiliza `InteractiveBrowserCredential`, flujo de autorización delegado con PKCE. Antes de consultar SharePoint, la pantalla muestra `Iniciar sesión con Microsoft 365`. Al pulsarlo, se reutiliza una sesión corporativa válida o se abre el navegador para completar el acceso. Solo después se habilita la carga automática del dashboard. El token se conserva en la caché de Azure Identity cifrada por el mecanismo de protección del usuario de Windows; nunca se escribe en configuración, estado de Streamlit, logs o el repositorio.
 
 Es necesario registrar una aplicación pública en Microsoft Entra, habilitar el redirect URI de aplicaciones móviles/escritorio `http://localhost` y conceder el permiso delegado de Microsoft Graph `Sites.Read.All`. Este permiso es el mínimo utilizado por la implementación porque resolver un site por su ruta requiere `Sites.Read.All`. El usuario autenticado también debe tener acceso al site.
 

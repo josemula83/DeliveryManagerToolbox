@@ -19,18 +19,28 @@ from delivery_manager_toolbox.modules.people_360.sharepoint import (
     GraphPermissionError,
     GraphTemporaryError,
     People360SourceError,
+    authenticate_people360,
     create_people360_repository,
 )
 
 
 LOGGER = get_logger(__name__)
 STATE_DASHBOARD = "people360_dashboard"
+STATE_AUTHENTICATED = "people360_authenticated"
 
 
 def render() -> None:
     settings = load_settings().people360
     st.title("People 360")
     st.caption("Seguimiento operativo de supervisores, personas, bitácoras y reuniones")
+
+    if settings.source == "local":
+        st.session_state[STATE_AUTHENTICATED] = True
+    else:
+        st.session_state.setdefault(STATE_AUTHENTICATED, False)
+    if not st.session_state[STATE_AUTHENTICATED]:
+        _render_login(settings)
+        return
 
     refresh = st.button("Actualizar datos", icon=":material/refresh:", width="content")
     if refresh:
@@ -46,6 +56,9 @@ def render() -> None:
             LOGGER.warning("No se pudo cargar People 360: %s", type(exc).__name__)
             status.update(label="No se han podido actualizar los datos", state="error", expanded=False)
             st.error(_friendly_source_error(exc), title="Error de acceso a People 360")
+            if isinstance(exc, GraphAuthenticationError):
+                st.session_state[STATE_AUTHENTICATED] = False
+                _render_login(settings)
             return
         except (OSError, ValueError) as exc:
             LOGGER.warning("No se pudo procesar People 360: %s", type(exc).__name__)
@@ -115,6 +128,45 @@ def render() -> None:
                 pd.DataFrame([{"Hoja": issue.sheet, "Fila": issue.row, "Incidencia": issue.message} for issue in dashboard.dataset.issues]),
                 width="stretch", hide_index=True,
             )
+
+
+def _render_login(settings: People360Settings) -> None:
+    with st.container(border=True):
+        st.subheader("Acceso a Microsoft 365", anchor=False)
+        st.caption(
+            "Inicia sesión con tu cuenta corporativa para acceder al Excel de People 360 en SharePoint."
+        )
+        if not settings.graph_client_id:
+            st.warning(
+                "El administrador debe configurar `PEOPLE360_GRAPH_CLIENT_ID` con la aplicación autorizada de Microsoft Entra antes de iniciar sesión.",
+                title="Integración pendiente de configurar",
+            )
+            st.button(
+                "Iniciar sesión con Microsoft 365",
+                icon=":material/login:",
+                disabled=True,
+                width="content",
+                key="people360_login_disabled",
+            )
+            return
+
+        if st.button(
+            "Iniciar sesión con Microsoft 365",
+            icon=":material/login:",
+            type="primary",
+            width="content",
+            key="people360_login",
+        ):
+            try:
+                with st.spinner("Abriendo el inicio de sesión corporativo..."):
+                    authenticate_people360(settings)
+            except People360SourceError as exc:
+                LOGGER.warning("No se pudo autenticar People 360: %s", type(exc).__name__)
+                st.error(_friendly_source_error(exc), title="No se pudo iniciar sesión")
+                return
+            st.session_state[STATE_AUTHENTICATED] = True
+            st.session_state.pop(STATE_DASHBOARD, None)
+            st.rerun()
 
 
 def load_people360_dashboard(
