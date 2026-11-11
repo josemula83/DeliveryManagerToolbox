@@ -2,23 +2,29 @@
 
 from __future__ import annotations
 
-from io import BytesIO
-
 import pandas as pd
 import streamlit as st
 
-from delivery_manager_toolbox.core.config import load_settings
+from delivery_manager_toolbox.core.config import People360Settings, load_settings
 from delivery_manager_toolbox.core.logging import get_logger
 from delivery_manager_toolbox.modules.people_360.export import export_tracking
 from delivery_manager_toolbox.modules.people_360.filters import filter_employees
 from delivery_manager_toolbox.modules.people_360.models import JournalKind, People360Dashboard, Priority
-from delivery_manager_toolbox.modules.people_360.repository import ExcelPeople360Repository
+from delivery_manager_toolbox.modules.people_360.repository import People360Repository
 from delivery_manager_toolbox.modules.people_360.service import build_dashboard
+from delivery_manager_toolbox.modules.people_360.sharepoint import (
+    AuthenticationConfigurationError,
+    GraphAuthenticationError,
+    GraphFileNotFoundError,
+    GraphPermissionError,
+    GraphTemporaryError,
+    People360SourceError,
+    create_people360_repository,
+)
 
 
 LOGGER = get_logger(__name__)
 STATE_DASHBOARD = "people360_dashboard"
-STATE_UPLOAD = "people360_uploaded_payload"
 
 
 def render() -> None:
@@ -26,34 +32,25 @@ def render() -> None:
     st.title("People 360")
     st.caption("Seguimiento operativo de supervisores, personas, bitácoras y reuniones")
 
-    uploaded = st.file_uploader(
-        "Excel de People 360",
-        type=("xlsx",),
-        help="Fuente local temporal para desarrollo o contingencia. La fuente definitiva permanece preparada para SharePoint.",
-    )
-    if uploaded is not None:
-        payload = uploaded.getvalue()
-        if st.session_state.get(STATE_UPLOAD) != payload:
-            st.session_state[STATE_UPLOAD] = payload
-            st.session_state.pop(STATE_DASHBOARD, None)
-
-    refresh = st.button("Actualizar datos", icon=":material/refresh:")
+    refresh = st.button("Actualizar datos", icon=":material/refresh:", width="content")
     if refresh:
         st.session_state.pop(STATE_DASHBOARD, None)
 
     if STATE_DASHBOARD not in st.session_state:
+        status = st.status("Conectando con SharePoint...", expanded=True)
         try:
-            repository = _repository_from_runtime(settings)
-            dataset = repository.load()
-            st.session_state[STATE_DASHBOARD] = build_dashboard(
-                dataset,
-                threshold_days=settings.alert_threshold_days,
-                medium_min=settings.priority_medium_min,
-                ok_above=settings.priority_ok_above,
-            )
-        except Exception as exc:  # La UI traduce errores de integración; no muestra trazas.
+            repository = create_people360_repository(settings, progress=status.write)
+            st.session_state[STATE_DASHBOARD] = load_people360_dashboard(repository, settings)
+            status.update(label="Datos de People 360 disponibles", state="complete", expanded=False)
+        except People360SourceError as exc:
             LOGGER.warning("No se pudo cargar People 360: %s", type(exc).__name__)
-            st.warning(_friendly_source_error(settings.source, exc))
+            status.update(label="No se han podido actualizar los datos", state="error", expanded=False)
+            st.error(_friendly_source_error(exc), title="Error de acceso a People 360")
+            return
+        except (OSError, ValueError) as exc:
+            LOGGER.warning("No se pudo procesar People 360: %s", type(exc).__name__)
+            status.update(label="No se han podido procesar los datos", state="error", expanded=False)
+            st.error("El fichero de People 360 no tiene el formato esperado o no está disponible.", title="Error de datos")
             return
 
     dashboard: People360Dashboard = st.session_state[STATE_DASHBOARD]
@@ -120,21 +117,31 @@ def render() -> None:
             )
 
 
-def _repository_from_runtime(settings):
-    payload = st.session_state.get(STATE_UPLOAD)
-    if payload:
-        return ExcelPeople360Repository(BytesIO(payload), "archivo cargado")
-    if settings.source == "local":
-        if settings.local_file is None:
-            raise ValueError("PEOPLE360_LOCAL_FILE no está configurado")
-        return ExcelPeople360Repository(settings.local_file)
-    raise RuntimeError("El cliente SharePoint corporativo todavía no está disponible en el runtime local")
+def load_people360_dashboard(
+    repository: People360Repository, settings: People360Settings
+) -> People360Dashboard:
+    """Recarga siempre el repositorio recibido; el estado de sesión se gestiona en la UI."""
+    dataset = repository.load()
+    return build_dashboard(
+        dataset,
+        threshold_days=settings.alert_threshold_days,
+        medium_min=settings.priority_medium_min,
+        ok_above=settings.priority_ok_above,
+    )
 
 
-def _friendly_source_error(source: str, error: Exception) -> str:
-    if source == "sharepoint":
-        return "La fuente SharePoint está configurada, pero este runtime no dispone aún de un cliente corporativo reutilizable. Carga el XLSX temporalmente o configura PEOPLE360_SOURCE=local y PEOPLE360_LOCAL_FILE."
-    return f"No se ha podido leer el Excel configurado: {error}"
+def _friendly_source_error(error: People360SourceError) -> str:
+    if isinstance(error, AuthenticationConfigurationError):
+        return "La autenticación corporativa no está configurada. Define PEOPLE360_GRAPH_CLIENT_ID con el identificador de la aplicación pública registrada en Microsoft Entra."
+    if isinstance(error, GraphAuthenticationError):
+        return "No se ha podido completar la autenticación Microsoft 365. Vuelve a intentarlo y finaliza el inicio de sesión corporativo."
+    if isinstance(error, GraphPermissionError):
+        return f"No se ha podido acceder al fichero. La aplicación necesita el permiso delegado `{error.required_scope}` y acceso del usuario al sitio."
+    if isinstance(error, GraphFileNotFoundError):
+        return "No se ha encontrado el site, la biblioteca o el fichero de People 360 configurado en SharePoint."
+    if isinstance(error, GraphTemporaryError):
+        return "Microsoft 365 no está disponible temporalmente. Pulsa Actualizar datos para volver a intentarlo."
+    return "No se ha podido acceder al fichero de People 360. Comprueba la configuración y tus permisos."
 
 
 def _render_metrics(dashboard: People360Dashboard) -> None:

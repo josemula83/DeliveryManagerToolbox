@@ -14,6 +14,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.logging.file.parent, PROJECT_ROOT / "logs")
         self.assertEqual(settings.jira.people_file, PROJECT_ROOT / "config" / "jira_people.json")
         self.assertEqual(settings.people360.source, "sharepoint")
+        self.assertEqual(settings.people360.sharepoint_site_path, "/sites/BBVACentros")
+        self.assertEqual(settings.people360.sharepoint_library, "Documentos compartidos")
+        self.assertEqual(settings.people360.graph_scope, "https://graph.microsoft.com/Sites.Read.All")
         self.assertEqual(settings.people360.alert_threshold_days, 60)
         self.assertEqual(settings.people360.export_file_name, "seguimiento_people_360.xlsx")
 

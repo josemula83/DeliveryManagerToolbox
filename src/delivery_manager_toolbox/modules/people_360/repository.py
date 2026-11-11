@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
@@ -26,24 +25,6 @@ REQUIRED_SHEETS = ("Empleados", "Bitacoras", "Historico reuniones")
 
 class People360Repository(Protocol):
     def load(self) -> People360Dataset: ...
-
-
-class SharePointBinaryClient(Protocol):
-    """Puerto para una futura autenticación corporativa Microsoft 365."""
-
-    def download(self, site: str, folder: str, file_name: str) -> bytes: ...
-
-
-class SharePointExcelRepository:
-    def __init__(self, client: SharePointBinaryClient, site: str, folder: str, file_name: str):
-        self._client = client
-        self._site = site
-        self._folder = folder
-        self._file_name = file_name
-
-    def load(self) -> People360Dataset:
-        payload = self._client.download(self._site, self._folder, self._file_name)
-        return ExcelPeople360Repository(BytesIO(payload), self._file_name).load()
 
 
 class ExcelPeople360Repository:
@@ -73,6 +54,13 @@ class ExcelPeople360Repository:
             )
         finally:
             workbook.close()
+
+
+class LocalPeople360Repository(ExcelPeople360Repository):
+    """Fuente local habilitada únicamente por configuración explícita."""
+
+    def __init__(self, path: Path):
+        super().__init__(path, path.name)
 
 
 def _rows(sheet):

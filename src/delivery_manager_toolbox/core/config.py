@@ -32,10 +32,15 @@ class JiraSettings:
 @dataclass(frozen=True, slots=True)
 class People360Settings:
     source: str
-    sharepoint_site: str
+    sharepoint_hostname: str
+    sharepoint_site_path: str
+    sharepoint_library: str
     sharepoint_folder: str
     file_name: str
     local_file: Path | None
+    graph_tenant_id: str
+    graph_client_id: str
+    graph_scope: str
     alert_threshold_days: int
     priority_medium_min: float
     priority_ok_above: float
@@ -79,10 +84,15 @@ def load_settings(path: Path | None = None) -> Settings:
         jira=JiraSettings(people_file=people_path),
         people360=People360Settings(
             source=os.getenv("PEOPLE360_SOURCE", people360["source"]).strip().casefold(),
-            sharepoint_site=people360["sharepoint_site"],
+            sharepoint_hostname=people360["sharepoint_hostname"],
+            sharepoint_site_path=people360["sharepoint_site_path"],
+            sharepoint_library=people360["sharepoint_library"],
             sharepoint_folder=people360["sharepoint_folder"],
             file_name=people360["file_name"],
             local_file=local_file,
+            graph_tenant_id=os.getenv("PEOPLE360_GRAPH_TENANT_ID", people360["graph_tenant_id"]).strip(),
+            graph_client_id=os.getenv("PEOPLE360_GRAPH_CLIENT_ID", people360["graph_client_id"]).strip(),
+            graph_scope=people360["graph_scope"],
             alert_threshold_days=int(people360["alert_threshold_days"]),
             priority_medium_min=float(people360["priority_medium_min"]),
             priority_ok_above=float(people360["priority_ok_above"]),

@@ -4,13 +4,13 @@ People 360 ofrece una vista operativa por Supervisor N1 para revisar cobertura d
 
 ## Fuente y esquema observado
 
-La ubicación y el nombre del fichero se configuran en `config/settings.toml`. El libro inspeccionado contiene:
+La ubicación y el nombre del fichero se configuran en `config/settings.toml`. La fuente predeterminada es SharePoint y no requiere seleccionar ni descargar manualmente el libro. El libro inspeccionado contiene:
 
 - `Empleados`: `numeroEmpleado`, `nombre`, `email`, `tecnologia`, `tecnologiaCliente`, `ubicacion`, `jobRole`, `segmento`, fechas de experiencia e incorporación, datos de auditoría, `area`, `cliente`, `servicio`, `equipo`, `manager_oficina`, `supervisor_n1` a `supervisor_n12`, vigencia, `estado` y `usuarioTeams`.
 - `Bitacoras`: `numeroEmpleado`, `nombre`, `tipo`, `fecha`, `bitacora_empleado`, `bitacora_supervisor`, `objetivos`, `desempeno`, `satisfaccion` y `compromiso`.
 - `Historico reuniones`: `numeroEmpleado`, `nombre`, `fechaSolicitud`, `estado`, `fechaGestion` y `gestionadaPor`.
 
-La referencia funcional sitúa `empleados.xlsx` en `Documentos compartidos/General/PowerBI/Dashboard People 360`. Durante la inspección se encontró el fichero actualizado bajo `General/PowerBI/Evaluaciones` y un dashboard distinto en la carpeta de referencia. Por eso la carpeta y el fichero son parámetros, no constantes de código.
+La ruta configurada es `BBVACentros / Documentos compartidos / General / PowerBI / Dashboard People 360 / empleados.xlsx`. Host, site, biblioteca, carpeta y fichero son parámetros independientes, no URLs dispersas en la interfaz.
 
 ## Cálculos
 
@@ -27,13 +27,40 @@ La alerta de antigüedad compara la última bitácora válida del supervisor con
 ## Arquitectura
 
 - `models.py`: entidades normalizadas, métricas y resultados.
-- `repository.py`: puerto `People360Repository`, adaptador XLSX y contrato binario para SharePoint.
+- `repository.py`: puerto `People360Repository`, normalizador XLSX y fuente local explícita.
+- `sharepoint.py`: autenticación Microsoft Entra, cliente Microsoft Graph y `SharePointPeople360Repository`.
 - `service.py`: cobertura, prioridades, alertas y agregación.
 - `filters.py`: búsqueda y filtros puros.
 - `export.py`: informe XLSX de la vista filtrada; es el punto de extensión para Teams.
 - `ui.py`: estado de sesión, navegación Supervisor → Empleado y presentación Streamlit.
 
-El adaptador `SharePointExcelRepository` recibe un `SharePointBinaryClient`; no conoce tokens ni autenticación. El proyecto aún no dispone de un cliente Microsoft 365 reutilizable en runtime. Hasta incorporarlo, se puede cargar un XLSX desde la pantalla o configurar una fuente local para desarrollo:
+## Autenticación y SharePoint
+
+`AzureIdentityTokenProvider` utiliza `InteractiveBrowserCredential`, flujo de autorización delegado con PKCE. La primera carga abre el inicio de sesión corporativo si no existe una sesión válida. El token se conserva en la caché de Azure Identity cifrada por el mecanismo de protección del usuario de Windows; nunca se escribe en configuración, logs o el repositorio.
+
+Es necesario registrar una aplicación pública en Microsoft Entra, habilitar el redirect URI de aplicaciones móviles/escritorio `http://localhost` y conceder el permiso delegado de Microsoft Graph `Sites.Read.All`. Este permiso es el mínimo utilizado por la implementación porque resolver un site por su ruta requiere `Sites.Read.All`. El usuario autenticado también debe tener acceso al site.
+
+El identificador de aplicación no es un secreto y se suministra sin versionarlo:
+
+```powershell
+$env:PEOPLE360_GRAPH_CLIENT_ID = "identificador-de-la-aplicacion-registrada"
+# Opcional si se desea fijar el tenant en lugar de `organizations`
+$env:PEOPLE360_GRAPH_TENANT_ID = "identificador-del-tenant"
+python desktop.py
+```
+
+El cliente usa Microsoft Graph v1.0 en esta secuencia:
+
+1. `GET /sites/{hostname}:/{site-path}` para localizar el site.
+2. `GET /sites/{site-id}/drives` para localizar `Documentos compartidos`.
+3. `GET /drives/{drive-id}/root:/{folder}/{file}` para obtener los metadatos.
+4. Descarga mediante la URL preautenticada devuelta por Graph, sin reenviar el token a ese host.
+
+El contenido XLSX se procesa en memoria. `Actualizar datos` descarta el dashboard de la sesión, vuelve a Graph y recalcula todas las métricas. La UI diferencia errores de autenticación, permisos, fichero inexistente y fallos temporales.
+
+## Desarrollo local
+
+La fuente local no aparece en la pantalla y solo se habilita explícitamente:
 
 ```powershell
 $env:PEOPLE360_SOURCE = "local"
@@ -41,7 +68,7 @@ $env:PEOPLE360_LOCAL_FILE = "C:\ruta\temporal\empleados.xlsx"
 streamlit run app.py
 ```
 
-La carga local no es la integración definitiva. Los datos permanecen en memoria de sesión, `Actualizar datos` invalida ese estado y no se registra el contenido de celdas.
+No existe uploader en el flujo normal. Los datos permanecen en memoria de sesión y no se registra el contenido de celdas.
 
 ## Exportación
 
