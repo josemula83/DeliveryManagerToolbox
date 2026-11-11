@@ -56,13 +56,6 @@ class ExcelPeople360Repository:
             workbook.close()
 
 
-class LocalPeople360Repository(ExcelPeople360Repository):
-    """Fuente local habilitada únicamente por configuración explícita."""
-
-    def __init__(self, path: Path):
-        super().__init__(path, path.name)
-
-
 def _rows(sheet):
     iterator = sheet.iter_rows(values_only=True)
     headers = [str(value).strip() if value is not None else "" for value in next(iterator)]

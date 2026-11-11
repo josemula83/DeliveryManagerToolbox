@@ -10,16 +10,6 @@ file = "logs/delivery-manager-toolbox.log"
 people_file = "config/jira_people.json"
 
 [people360]
-source = "sharepoint"
-sharepoint_hostname = "everisgroup.sharepoint.com"
-sharepoint_site_path = "/sites/BBVACentros"
-sharepoint_library = "Documentos compartidos"
-sharepoint_folder = "General/PowerBI/Dashboard People 360"
-file_name = "empleados.xlsx"
-local_file = ""
-graph_tenant_id = "organizations"
-graph_client_id = ""
-graph_scope = "https://graph.microsoft.com/Sites.Read.All"
 alert_threshold_days = 60
 priority_medium_min = 60
 priority_ok_above = 80

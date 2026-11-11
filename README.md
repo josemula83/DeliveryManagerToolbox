@@ -159,7 +159,7 @@ El CSV usa UTF-8 con BOM, separador de punto y coma y columnas iniciales `PKEY`,
 
 People 360 transforma las hojas reales `Empleados`, `Bitacoras` e `Historico reuniones` en una vista ejecutiva por Supervisor N1. Muestra KPIs globales, coberturas separadas de empleado y supervisor, prioridad semántica, seguimiento con más de 60 días, reuniones, filtros, ficha individual e histórico. La vista filtrada puede exportarse a Excel.
 
-La fuente SharePoint, el fichero, el umbral y las reglas de prioridad se centralizan en `config/settings.toml`. Antes de acceder a los datos, People 360 muestra un login explícito con Microsoft 365; tras autenticar la cuenta corporativa, la carga es automática mediante Microsoft Graph y no existe selección manual de Excel. Se requiere una aplicación pública de Microsoft Entra con permiso delegado `Sites.Read.All` y su identificador se proporciona mediante `PEOPLE360_GRAPH_CLIENT_ID`. El token se conserva en una caché cifrada fuera del repositorio y del estado de Streamlit, y el XLSX se procesa en memoria. La ruta local mediante `PEOPLE360_SOURCE=local` y `PEOPLE360_LOCAL_FILE` queda reservada para desarrollo y diagnóstico. Consulta la configuración completa en [`docs/people_360.md`](docs/people_360.md).
+El usuario selecciona o arrastra el XLSX corporativo desde la pantalla. El fichero se procesa únicamente en memoria durante la sesión y no se persiste ni se registra su contenido. El umbral y las reglas de prioridad se centralizan en `config/settings.toml`. Consulta la arquitectura y la fórmula de cobertura en [`docs/people_360.md`](docs/people_360.md).
 
 ## Comprobaciones
 
