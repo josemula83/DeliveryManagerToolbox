@@ -12,6 +12,15 @@ from delivery_manager_toolbox.modules.people_360.models import (
 )
 
 
+ACTIVE_EMPLOYEE_STATUS = "activo"
+
+
+def is_active_employee(status: str | None) -> bool:
+    """Solo el estado explícito ACTIVO habilita a una persona para los cálculos."""
+    normalized = " ".join((status or "").strip().casefold().split())
+    return normalized == ACTIVE_EMPLOYEE_STATUS
+
+
 def calculate_supervisor_priority(
     coverage: float | None, medium_min: float = 60.0, ok_above: float = 80.0,
 ) -> Priority:
@@ -53,6 +62,8 @@ def build_dashboard(
 
     tracking: list[EmployeeTracking] = []
     for employee in dataset.employees:
+        if not is_active_employee(employee.status):
+            continue
         journals = journals_by_employee[employee.employee_id]
         valid_employee = [j for j in journals if j.is_valid and j.kind is JournalKind.EMPLOYEE]
         valid_supervisor = [j for j in journals if j.is_valid and j.kind is JournalKind.SUPERVISOR]

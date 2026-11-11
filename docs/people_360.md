@@ -20,6 +20,8 @@ Una bitácora es válida cuando tiene identificador de empleado, tipo reconocido
 cobertura = empleados con al menos una bitácora válida del tipo / empleados del Supervisor N1 × 100
 ```
 
+Antes de calcular el dashboard se filtra la plantilla: solo cuentan las filas cuyo campo `estado`, normalizado sin distinguir mayúsculas ni espacios exteriores, sea exactamente `ACTIVO`. Estados como `INACTIVO`, `BAJA`, vacíos o desconocidos quedan fuera de empleados, supervisores, coberturas, alertas, reuniones y exportación, aunque sus filas se puedan normalizar sin interrumpir la lectura.
+
 La cobertura de empleado y la de supervisor se mantienen separadas. Un equipo sin denominador se presenta como `Sin datos`. La prioridad usa exclusivamente la cobertura del supervisor: más de 80 % es `OK`, de 60 % a 80 % incluidos es `Media` y menos de 60 % es `Crítica`.
 
 La alerta de antigüedad compara la última bitácora válida del supervisor con la fecha de consulta. Solo se activa cuando han transcurrido más de 60 días; una persona sin fecha se distingue como `Sin fecha` y no se convierte artificialmente en alerta.

@@ -13,6 +13,7 @@ from delivery_manager_toolbox.modules.people_360.repository import ExcelPeople36
 from delivery_manager_toolbox.modules.people_360.service import (
     build_dashboard,
     calculate_supervisor_priority,
+    is_active_employee,
     is_bitacora_overdue,
 )
 
@@ -30,6 +31,8 @@ def make_workbook() -> bytes:
     employees.append(["E03", "Carla Ejemplo", "carla@example.invalid", "Data", "", "Bilbao", "Lead", "B", "Cliente", "Servicio", "Equipo", "Supervisora Dos", "", "ACTIVO", "2026-05-01"])
     employees.append(["E03", "Carla Ejemplo", "carla@example.invalid", "Data", "", "Bilbao", "Lead", "B", "Cliente", "Servicio", "Equipo", "Supervisora Dos", "", "ACTIVO", "2026-05-02"])
     employees.append(["E04", "Diego Ejemplo", "diego@example.invalid", "", "", "", "", "", "", "", "", "", "", "ACTIVO", "bad-date"])
+    employees.append(["E05", "Elena Inactiva", "elena@example.invalid", "", "", "", "", "", "", "", "", "Supervisora Uno", "", "INACTIVO", "2026-05-03"])
+    employees.append(["E06", "Fabio Baja", "fabio@example.invalid", "", "", "", "", "", "", "", "", "Supervisora Tres", "", "BAJA", "2026-05-03"])
 
     journals = workbook.create_sheet("Bitacoras")
     journals.append(["numeroEmpleado", "nombre", "tipo", "fecha", "bitacora_empleado", "bitacora_supervisor", "objetivos", "desempeno", "satisfaccion", "compromiso"])
@@ -39,12 +42,17 @@ def make_workbook() -> bytes:
     journals.append(["E02", "Bruno Ejemplo", "supervisor", "2026-01-01", None, "Seguimiento", None, None, None, None])
     journals.append(["E03", "Carla Ejemplo", "empleado", "fecha incorrecta", "Texto", None, None, None, None, None])
     journals.append(["E03", "Carla Ejemplo", "supervisor", "2026-05-10", None, "Seguimiento", None, None, None, None])
+    journals.append(["E05", "Elena Inactiva", "empleado", "2026-05-10", "Seguimiento", None, None, None, None, None])
+    journals.append(["E05", "Elena Inactiva", "supervisor", "2026-05-10", None, "Seguimiento", None, None, None, None])
+    journals.append(["E06", "Fabio Baja", "supervisor", "2026-05-10", None, "Seguimiento", None, None, None, None])
 
     meetings = workbook.create_sheet("Historico reuniones")
     meetings.append(["numeroEmpleado", "nombre", "fechaSolicitud", "estado", "fechaGestion", "gestionadaPor"])
     meetings.append(["E01", "Ana Ejemplo", "2026-05-03", "GESTIONADA", "2026-05-04", "Responsable"])
     meetings.append(["E02", "Bruno Ejemplo", "2026-05-05", "PENDIENTE", "", ""])
     meetings.append(["E03", "Carla Ejemplo", "fecha incorrecta", "PENDIENTE", "", ""])
+    meetings.append(["E05", "Elena Inactiva", "2026-05-08", "PENDIENTE", "", ""])
+    meetings.append(["E06", "Fabio Baja", "2026-05-08", "PENDIENTE", "", ""])
     output = BytesIO()
     workbook.save(output)
     workbook.close()
@@ -52,6 +60,13 @@ def make_workbook() -> bytes:
 
 
 class PriorityTests(unittest.TestCase):
+    def test_only_explicit_active_status_is_eligible(self) -> None:
+        self.assertTrue(is_active_employee(" ACTIVO "))
+        self.assertTrue(is_active_employee("activo"))
+        self.assertFalse(is_active_employee("INACTIVO"))
+        self.assertFalse(is_active_employee("BAJA"))
+        self.assertFalse(is_active_employee(None))
+
     def test_exact_priority_boundaries_and_null(self) -> None:
         self.assertEqual(calculate_supervisor_priority(80.01), Priority.OK)
         self.assertEqual(calculate_supervisor_priority(80), Priority.MEDIUM)
@@ -72,7 +87,7 @@ class People360DataTests(unittest.TestCase):
         self.dashboard = build_dashboard(self.dataset, REFERENCE)
 
     def test_repository_tolerates_duplicates_invalid_dates_and_missing_supervisor(self) -> None:
-        self.assertEqual(len(self.dataset.employees), 4)
+        self.assertEqual(len(self.dataset.employees), 6)
         self.assertGreaterEqual(len(self.dataset.issues), 3)
         self.assertEqual(sum(e.supervisor_n1 is None for e in self.dataset.employees), 1)
 
@@ -87,6 +102,10 @@ class People360DataTests(unittest.TestCase):
         self.assertEqual(metrics.ok_supervisors, 1)
         self.assertEqual(metrics.overdue_people, 1)
         self.assertEqual(metrics.pending_meetings, 1)
+        self.assertEqual(
+            {item.employee.name for item in self.dashboard.employees},
+            {"Ana Ejemplo", "Bruno Ejemplo", "Carla Ejemplo", "Diego Ejemplo"},
+        )
 
     def test_filters_supervisor_priority_alert_pending_and_search(self) -> None:
         self.assertEqual(len(filter_employees(self.dashboard, supervisor="Supervisora Uno")), 2)

@@ -159,6 +159,8 @@ El CSV usa UTF-8 con BOM, separador de punto y coma y columnas iniciales `PKEY`,
 
 People 360 transforma las hojas reales `Empleados`, `Bitacoras` e `Historico reuniones` en una vista ejecutiva por Supervisor N1. Muestra KPIs globales, coberturas separadas de empleado y supervisor, prioridad semántica, seguimiento con más de 60 días, reuniones, filtros, ficha individual e histórico. La vista filtrada puede exportarse a Excel.
 
+Solo se incluyen personas cuyo campo `estado` sea `ACTIVO`; empleados inactivos, de baja, sin estado o con un estado desconocido quedan excluidos de todas las métricas y resultados.
+
 El usuario selecciona o arrastra el XLSX corporativo desde la pantalla. El fichero se procesa únicamente en memoria durante la sesión y no se persiste ni se registra su contenido. El umbral y las reglas de prioridad se centralizan en `config/settings.toml`. Consulta la arquitectura y la fórmula de cobertura en [`docs/people_360.md`](docs/people_360.md).
 
 ## Comprobaciones
