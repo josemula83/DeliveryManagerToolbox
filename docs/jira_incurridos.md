@@ -1,58 +1,98 @@
-# JIRA · Informe de Incurridos BBVA
+# JIRA · Incurridos y Aplantillado
 
-La herramienta consolida Worklogs de los proyectos configurados en el extractor.
-JIRA se abre en una ventana Edge/WebView2 administrada por Delivery Manager
-Toolbox. Si la sesión no está autenticada, el usuario inicia sesión directamente
-en esa ventana; al llegar al origen autorizado, la aplicación inyecta
-automáticamente el formulario de extracción.
+El módulo ejecuta la extracción dentro de una ventana Edge/WebView2 administrada
+por Delivery Manager Toolbox. Tras el login corporativo, el extractor se inyecta
+únicamente en el origen JIRA autorizado y permite seleccionar fechas y PKEYS.
 
-## Sesión y arquitectura
+## Flujo
 
-El arranque recomendado es `python desktop.py`. El contenedor inicia Streamlit en
-un puerto local no fijo y crea dos ventanas pertenecientes al mismo proceso de
-escritorio: la Toolbox y JIRA. La selección del módulo JIRA envía una orden por
-un canal efímero limitado a `127.0.0.1` para mostrar la segunda ventana.
+```text
+JIRA → Extraer → Descargar CSV
+JIRA → Extraer → Aplantillado
+```
 
-El perfil de WebView2 se conserva en
-`%LOCALAPPDATA%\DeliveryManagerToolbox\WebView2`, fuera del repositorio. WebView2
-gestiona directamente la sesión. El código Python no lee, copia ni registra
-credenciales, cookies, tokens, URLs de navegación o respuestas del informe.
+Al finalizar una extracción válida aparecen **Descargar CSV** y **Aplantillado**
+en el popup. No es necesario guardar ni volver a cargar el CSV. Una nueva
+extracción descarta el resultado anterior antes de comenzar.
 
-El controlador clasifica únicamente el estado general de cada navegación:
-carga, autenticación externa, login de JIRA o documento del origen autorizado.
-Solo en este último caso ejecuta el fuente versionado
-`modules/jira/assets/extractor.js`. La protección por identificador de modal
-evita inyecciones duplicadas en un mismo documento.
+## Transferencia y modelo en memoria
 
-## Uso
+`extractor.js` envía a la API expuesta por pywebview un mensaje estructurado con
+tipo `jira_extraction_completed`, fechas, PKEYS, cabecera y filas completas. El
+host valida y convierte el mensaje en un único `ExtractionResult` con:
 
-1. Ejecuta `python desktop.py` desde el entorno virtual del proyecto.
-2. Selecciona **JIRA · Incurridos** en la Toolbox. La ventana integrada aparece
-   automáticamente y sin botones hacia navegadores externos.
-3. Inicia sesión si JIRA o el proveedor corporativo de identidad lo solicitan.
-4. Al volver a JIRA, espera a que aparezca el formulario **Incurridos BBVA**.
-5. Elige fechas y proyectos, genera el informe y descarga el CSV.
+- intervalo y PKEYS;
+- cabecera y valores originales, necesarios para reproducir el CSV;
+- persona, fecha, horas, tarea, comentario y PKEY normalizados para análisis.
 
-## Consultas y consolidación
+La normalización deriva de las columnas reales empleadas por el extractor y el
+legacy: `Name`, `Date`, `Hours`, `Sub-Task Summary` o `Summary`, y `Comment`. Los
+nombres solo se normalizan mediante trim, espacios y comparación case-insensitive;
+no hay fuzzy matching.
 
-El extractor divide el rango por meses naturales. Las peticiones se realizan
-secuencialmente contra el endpoint de ScriptRunner usando la sesión del propio
-WebView2. Los fallos parciales se muestran y las demás consultas continúan. No
-se registran en disco respuestas ni datos personales.
+El host mantiene ese resultado en un almacén protegido por lock. Streamlit lo
+recupera una sola vez por revisión a través del canal local `127.0.0.1`, protegido
+con el token efímero del proceso. No se usan Downloads, portapapeles, scraping ni
+archivos temporales. El CSV y Aplantillado consumen el mismo objeto.
 
-## CSV
+## Aplantillado
 
-El fichero se denomina `Incurridos_BBVA_FECHA_DESDE_FECHA_HASTA.csv`. Usa UTF-8
-con BOM, punto y coma como separador y todos los campos entre comillas. Añade
-`PKEY`, `Año`, `Mes` y `Año-Mes` antes de las columnas originales de JIRA.
+La implementación actual porta la lógica de
+`legacy/facturacion_anterior_agrupado_persona.html` sin depender de ese fichero en
+runtime. Ofrece:
+
+- selección de persona activa y año disponible;
+- vista mensual detallada y año completo;
+- agrupación por persona y fecha;
+- horas, tareas y comentarios por día;
+- métricas de horas totales y días por categoría;
+- detalle de fechas de cada categoría;
+- lunes-viernes sin registros como faltantes.
+
+La prioridad de clasificación se conserva: Vacation/Vacaciones, Festive/Festivo,
+Compensated/Compensado, Staff/Augmentation y Otros. Los fines de semana vacíos no
+son faltantes. Esta regla está encapsulada en `is_missing_workday()` para admitir
+un calendario laboral futuro.
+
+## Configuración de personas
+
+La primera extracción detecta todos los nombres únicos y los añade activados. En
+extracciones posteriores se aplica la unión entre la configuración existente y
+los nuevos nombres; nunca se eliminan automáticamente personas ausentes.
+
+La interfaz permite activar, desactivar, añadir, eliminar, restaurar las personas
+detectadas, guardar, importar y exportar. El almacenamiento local es
+`config/jira_people.json`, ignorado por Git. Su formato es:
+
+```json
+{
+  "version": 1,
+  "people": [
+    {"name": "Persona de ejemplo", "enabled": true}
+  ]
+}
+```
+
+Se rechazan JSON inválidos, versiones desconocidas, nombres vacíos, estados no
+booleanos y duplicados que solo difieren por espacios o mayúsculas. Una
+configuración dañada no bloquea una nueva extracción: se reconstruye a partir de
+las personas detectadas.
+
+## Privacidad y persistencia
+
+- WebView2 conserva su perfil en
+  `%LOCALAPPDATA%\DeliveryManagerToolbox\WebView2`, fuera del repositorio.
+- Python no lee ni registra credenciales, cookies o tokens JIRA.
+- Los registros extraídos solo viven en memoria y no generan históricos.
+- La única persistencia funcional nueva es la configuración de personas.
+- El HTML legacy permanece como referencia histórica y no se carga en producción.
 
 ## Limitaciones
 
-- Se requiere Windows, Microsoft Edge WebView2, acceso a la red corporativa y
-  permisos válidos en JIRA.
-- La validación automatizada usa URLs y respuestas sintéticas; nunca consulta
-  datos reales.
-- Si cambia el origen, el contrato del endpoint o la columna de fecha, debe
-  publicarse una nueva versión controlada del extractor.
-- El arranque directo con `streamlit run app.py` sigue siendo útil para los demás
-  módulos, pero no dispone del navegador JIRA integrado.
+- Se requiere Windows, Edge WebView2, red corporativa y permisos JIRA.
+- El año completo conserva el comportamiento legacy: cualquier lunes-viernes sin
+  registros en ese año se cuenta inicialmente como faltante, incluso fuera del
+  intervalo extraído.
+- Los tests usan exclusivamente datos sintéticos y no conectan con JIRA.
+- `streamlit run app.py` permite administrar personas y ver el estado vacío, pero
+  la extracción integrada requiere `python desktop.py`.

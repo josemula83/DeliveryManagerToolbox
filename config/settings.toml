@@ -6,3 +6,6 @@ subtitle = "Automatización modular para Delivery Management"
 level = "INFO"
 file = "logs/delivery-manager-toolbox.log"
 
+[jira]
+people_file = "config/jira_people.json"
+

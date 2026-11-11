@@ -10,6 +10,7 @@ htmlcov/
 venv/
 .env
 .dmt-webview/
+config/jira_people.json
 .idea/
 .vscode/
 logs/*.log

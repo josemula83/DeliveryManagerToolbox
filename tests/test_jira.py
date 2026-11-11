@@ -16,6 +16,9 @@ from delivery_manager_toolbox.modules.jira.browser import (
 from delivery_manager_toolbox.modules.jira.desktop_bridge import (
     BRIDGE_TOKEN_ENV,
     BRIDGE_URL_ENV,
+    acknowledge_analysis_request,
+    request_jira_extraction,
+    request_jira_snapshot,
     request_jira_window,
 )
 from delivery_manager_toolbox.modules.jira.extractor import (
@@ -245,6 +248,18 @@ def test_download_is_only_enabled_after_a_valid_header() -> None:
     assert TIMESHEET_ENDPOINT in source
 
 
+def test_extractor_transfers_one_result_to_csv_and_aplantillado_actions() -> None:
+    source = render_extractor_source()
+
+    assert 'type: "jira_extraction_completed"' in source
+    assert "receive_jira_extraction" in source
+    assert 'text: "Descargar CSV"' in source
+    assert 'text: "Aplantillado"' in source
+    assert "get_jira_csv" in source
+    assert "open_aplantillado" in source
+    assert "clear_jira_extraction" in source
+
+
 def test_injection_script_prevents_a_duplicate_modal() -> None:
     script = build_injection_script()
 
@@ -335,6 +350,53 @@ def test_bridge_reports_unavailable_without_desktop_or_on_connection_error() -> 
     assert status.state is JiraBrowserState.ERROR
 
 
+class _PayloadResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def test_bridge_reads_status_extraction_and_acknowledges_analysis() -> None:
+    environment = {
+        BRIDGE_URL_ENV: "http://127.0.0.1:12345",
+        BRIDGE_TOKEN_ENV: "synthetic-token",
+    }
+    calls: list[tuple[str, str]] = []
+
+    def opener(request: object, timeout: int) -> _PayloadResponse:
+        calls.append((request.get_method(), request.full_url))
+        if request.full_url.endswith("/jira/status"):
+            return _PayloadResponse(
+                {
+                    "state": "extractor_injected",
+                    "revision": 3,
+                    "hasExtraction": True,
+                    "analysisRequested": True,
+                }
+            )
+        if request.full_url.endswith("/jira/extraction"):
+            return _PayloadResponse({"from": "2026-01-01", "rows": []})
+        return _PayloadResponse({"ok": True})
+
+    snapshot = request_jira_snapshot(environment, opener)
+    extraction = request_jira_extraction(environment, opener)
+    acknowledged = acknowledge_analysis_request(environment, opener)
+
+    assert snapshot.available is True
+    assert snapshot.revision == 3
+    assert snapshot.has_extraction is True
+    assert snapshot.analysis_requested is True
+    assert extraction == {"from": "2026-01-01", "rows": []}
+    assert acknowledged is True
+    assert calls == [
+        ("GET", "http://127.0.0.1:12345/jira/status"),
+        ("GET", "http://127.0.0.1:12345/jira/extraction"),
+        ("POST", "http://127.0.0.1:12345/jira/analysis/ack"),
+    ]
+
+
 class _SyntheticWindow:
     def __init__(self, url: str) -> None:
         self.url = url
@@ -392,6 +454,23 @@ def test_controller_reuses_window_and_closes_it_with_main_application() -> None:
     controller.shutdown()
     assert window.was_destroyed is True
     assert controller.on_closing() is True
+
+
+def test_controller_focuses_toolbox_when_aplantillado_is_requested() -> None:
+    jira_window = _SyntheticWindow(JIRA_DASHBOARD_URL)
+    main_window = _SyntheticWindow("http://127.0.0.1:8501")
+    controller = JiraWindowController()
+    controller.attach(jira_window)
+    controller.attach_main(main_window)
+
+    controller.open_analysis()
+
+    assert controller.analysis_requested() is True
+    assert main_window.was_shown is True
+    assert main_window.was_restored is True
+    assert jira_window.was_hidden is True
+    controller.acknowledge_analysis()
+    assert controller.analysis_requested() is False
 
 
 def test_jira_module_is_available_in_main_navigation() -> None:

@@ -14,6 +14,7 @@ import threading
 import time
 from urllib.request import urlopen
 
+from delivery_manager_toolbox.core.config import load_settings
 from delivery_manager_toolbox.core.logging import get_logger
 from delivery_manager_toolbox.modules.jira.browser import (
     BrowserConfiguration,
@@ -26,21 +27,29 @@ from delivery_manager_toolbox.modules.jira.desktop_bridge import (
     BRIDGE_URL_ENV,
 )
 from delivery_manager_toolbox.modules.jira.extractor import build_injection_script
+from delivery_manager_toolbox.modules.jira.host_api import ExtractionStore, JiraHostApi
+from delivery_manager_toolbox.modules.jira.people_config import PeopleConfigurationRepository
 
 
 LOGGER = get_logger(__name__)
 
 
 class JiraWindowController:
-    def __init__(self) -> None:
+    def __init__(self, store: ExtractionStore | None = None) -> None:
         self.window: object | None = None
+        self.main_window: object | None = None
+        self.store = store or ExtractionStore()
         self.state = JiraBrowserState.STARTING
         self._lock = threading.Lock()
         self._shutting_down = False
+        self._analysis_requested = False
 
     def attach(self, window: object) -> None:
         self.window = window
         self._set_state(JiraBrowserState.LOADING)
+
+    def attach_main(self, window: object) -> None:
+        self.main_window = window
 
     def open(self) -> JiraBrowserState:
         window = self.window
@@ -71,6 +80,23 @@ class JiraWindowController:
     def on_closed(self) -> None:
         self._set_state(JiraBrowserState.WINDOW_CLOSED)
 
+    def open_analysis(self) -> None:
+        with self._lock:
+            self._analysis_requested = True
+        if self.main_window is not None:
+            self.main_window.show()  # type: ignore[attr-defined]
+            self.main_window.restore()  # type: ignore[attr-defined]
+        if self.window is not None:
+            self.window.hide()  # type: ignore[attr-defined]
+
+    def analysis_requested(self) -> bool:
+        with self._lock:
+            return self._analysis_requested
+
+    def acknowledge_analysis(self) -> None:
+        with self._lock:
+            self._analysis_requested = False
+
     def on_closing(self) -> bool:
         """Oculta la ventana para poder reutilizar la sesión al volver al módulo."""
         if self._shutting_down:
@@ -96,17 +122,50 @@ def _bridge_handler(
     token: str,
 ) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            if self.path != "/jira/open" or self.headers.get("Authorization") != f"Bearer {token}":
-                self.send_error(404)
-                return
-            state = controller.open()
-            body = json.dumps({"state": state.value}).encode("utf-8")
+        def _authorized(self) -> bool:
+            return self.headers.get("Authorization") == f"Bearer {token}"
+
+        def _send_json(self, payload: dict[str, object]) -> None:
+            body = json.dumps(payload).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_GET(self) -> None:  # noqa: N802
+            if not self._authorized():
+                self.send_error(404)
+                return
+            revision, result = controller.store.snapshot()
+            if self.path == "/jira/status":
+                self._send_json(
+                    {
+                        "state": controller.state.value,
+                        "revision": revision,
+                        "hasExtraction": result is not None,
+                        "analysisRequested": controller.analysis_requested(),
+                    }
+                )
+                return
+            if self.path == "/jira/extraction" and result is not None:
+                self._send_json(result.to_transport())
+                return
+            self.send_error(404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            if not self._authorized():
+                self.send_error(404)
+                return
+            if self.path == "/jira/open":
+                self._send_json({"state": controller.open().value})
+                return
+            if self.path == "/jira/analysis/ack":
+                controller.acknowledge_analysis()
+                self._send_json({"ok": True})
+                return
+            self.send_error(404)
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -171,6 +230,8 @@ def run_desktop(
         stderr=subprocess.DEVNULL,
     )
     controller = JiraWindowController()
+    people_repository = PeopleConfigurationRepository(load_settings().jira.people_file)
+    host_api = JiraHostApi(controller.store, people_repository, controller.open_analysis)
     bridge = ThreadingHTTPServer(("127.0.0.1", bridge_port), _bridge_handler(controller, token))
     bridge_thread = threading.Thread(target=bridge.serve_forever, daemon=True)
     bridge_thread.start()
@@ -188,7 +249,9 @@ def run_desktop(
             width=1440,
             height=900,
             hidden=True,
+            js_api=host_api,
         )
+        controller.attach_main(main_window)
         controller.attach(jira_window)
         jira_window.events.loaded += controller.on_loaded
         jira_window.events.closing += controller.on_closing

@@ -133,9 +133,26 @@ credenciales o cookies.
 
 El extractor consulta los proyectos `BBVACS`, `BBVAALPHA`, `BBVAVALORE`,
 `BBVAGDV`, `BBVACIB` y `BBVACIBGM`. Divide el periodo en meses naturales,
-continúa ante errores parciales y genera un CSV compatible con Excel: UTF-8 con
-BOM, separador de punto y coma y columnas iniciales `PKEY`, `Año`, `Mes` y
-`Año-Mes`. El flujo, la arquitectura y las limitaciones se describen en
+continúa ante errores parciales y transfiere el resultado estructurado al proceso
+de escritorio. Ese único modelo en memoria permite descargar un CSV compatible
+con Excel o abrir Aplantillado sin descargar y volver a cargar archivos.
+
+Aplantillado agrupa por persona y fecha, conserva tareas, horas y comentarios,
+ofrece vistas mensual y anual, métricas y clasificación visual de Vacation,
+Festive, Compensated, Staff Augmentation, otros y lunes-viernes sin imputar. Las
+personas detectadas se incorporan activadas a `config/jira_people.json`; este
+fichero local ignorado por Git puede gestionarse, importarse y exportarse desde
+la interfaz mediante un JSON versionado. Los registros JIRA no se persisten.
+
+Flujos disponibles:
+
+```text
+JIRA → Extraer → Descargar CSV
+JIRA → Extraer → Aplantillado
+```
+
+El CSV usa UTF-8 con BOM, separador de punto y coma y columnas iniciales `PKEY`,
+`Año`, `Mes` y `Año-Mes`. El flujo, la arquitectura y las limitaciones se describen en
 [`docs/jira_incurridos.md`](docs/jira_incurridos.md).
 
 ## Comprobaciones

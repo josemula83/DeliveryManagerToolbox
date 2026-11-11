@@ -110,7 +110,12 @@
     type: "button",
     style: "display:none;background:#197a4a;color:#fff;border:0;border-radius:5px;padding:11px 18px;font-weight:700;cursor:pointer",
   });
-  actions.append(generateButton, downloadButton);
+  const templateButton = element("button", {
+    text: "Aplantillado",
+    type: "button",
+    style: "display:none;background:#6750a4;color:#fff;border:0;border-radius:5px;padding:11px 18px;font-weight:700;cursor:pointer",
+  });
+  actions.append(generateButton, downloadButton, templateButton);
 
   const status = element("div", {
     text: "Selecciona el periodo y los proyectos para comenzar.",
@@ -198,6 +203,10 @@
     generateButton.disabled = true;
     generateButton.style.cursor = "wait";
     downloadButton.style.display = "none";
+    templateButton.style.display = "none";
+    if (window.pywebview?.api?.clear_jira_extraction) {
+      await window.pywebview.api.clear_jira_extraction();
+    }
     showErrors([]);
     setProgress(0, totalQueries);
 
@@ -257,22 +266,54 @@
       errors.append(document.createTextNode(`${failures.length ? "\n" : ""}No se ha obtenido una cabecera válida. La descarga no está disponible.`));
       return;
     }
-    result = { from: selection.from, to: selection.to, header, records };
-    downloadButton.style.display = "inline-block";
+    result = { from: selection.from, to: selection.to, pkeys: selection.projects, header, records };
+    try {
+      if (!window.pywebview?.api?.receive_jira_extraction) {
+        throw new Error("El enlace con Delivery Manager Toolbox no está disponible");
+      }
+      const response = await window.pywebview.api.receive_jira_extraction({
+        type: "jira_extraction_completed",
+        payload: result,
+      });
+      if (!response?.ok) throw new Error(response?.error || "No se pudo transferir la extracción");
+      if (response.newPeople?.length) {
+        status.textContent += ` · Nuevas personas: ${response.newPeople.join(", ")}`;
+      }
+      if (response.warning) {
+        errors.append(document.createTextNode(`${failures.length ? "\n" : ""}${response.warning}`));
+      }
+      downloadButton.style.display = "inline-block";
+      templateButton.style.display = "inline-block";
+    } catch (error) {
+      result = null;
+      errors.append(document.createTextNode(`${failures.length ? "\n" : ""}${error instanceof Error ? error.message : String(error)}`));
+    }
   });
 
-  downloadButton.addEventListener("click", () => {
+  downloadButton.addEventListener("click", async () => {
     if (!result) return;
-    const rows = [["PKEY", "Año", "Mes", "Año-Mes", ...result.header], ...result.records];
-    const csv = rows
-      .map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(";"))
-      .join("\n");
-    const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = element("a");
-    anchor.href = url;
-    anchor.download = `Incurridos_BBVA_${result.from}_${result.to}.csv`;
-    anchor.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    try {
+      const response = await window.pywebview.api.get_jira_csv();
+      if (!response?.ok) throw new Error(response?.error || "No se pudo generar el CSV");
+      const binary = window.atob(response.contents);
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = element("a");
+      anchor.href = url;
+      anchor.download = response.filename;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      errors.append(document.createTextNode(`\n${error instanceof Error ? error.message : String(error)}`));
+    }
+  });
+
+  templateButton.addEventListener("click", async () => {
+    if (!result) return;
+    const response = await window.pywebview.api.open_aplantillado();
+    if (!response?.ok) {
+      errors.append(document.createTextNode(`\n${response?.error || "No se pudo abrir Aplantillado"}`));
+    }
   });
 })();
